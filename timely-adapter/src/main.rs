@@ -12,15 +12,71 @@
 
 #![deny(missing_docs)]
 
+use std::time::Duration;
+
+use timely::dataflow::operators::aggregation::Aggregate;
 use timely::dataflow::operators::capture::replay::Replay;
+use timely::dataflow::operators::delay::Delay;
+use timely::dataflow::operators::filter::Filter;
 use timely::dataflow::operators::inspect::Inspect;
 use timely::dataflow::operators::map::Map;
+use timely::dataflow::Scope;
+use timely::dataflow::Stream;
+use timely::logging::TimelyEvent;
 use timely::logging::TimelyEvent::{Channels, Operates};
+use timely::Data;
 
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::operators::consolidate::Consolidate;
+use differential_dataflow::operators::join::Join;
+use differential_dataflow::operators::reduce::Reduce;
 
 mod connect;
 use crate::connect::{make_file_replayers, make_replayers, open_sockets};
+
+fn reconstruct_dataflow<S: Scope<Timestamp = Duration>>(
+    stream: Stream<S, (Duration, usize, TimelyEvent)>,
+) {
+    let operates = stream
+        .filter(|(_, worker, _)| *worker == 0 as usize)
+        .flat_map(|(t, _worker, x)| {
+            if let Operates(event) = x {
+                if event.addr.len() > 1 {
+                    Some(((event.addr[1], event), t, 1))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .as_collection();
+
+    stream
+        .filter(|(_, worker, _)| *worker == 0 as usize)
+        .flat_map(|(t, _worker, x)| {
+            if let Channels(event) = x {
+                Some(((event.source.0, event), t, 1))
+            } else {
+                None
+            }
+        })
+        .as_collection()
+        .join(&operates) // join sources
+        .map(|(_key, (a, b))| (a.target.0, (a, b)))
+        .join(&operates) // join targets
+        .map(|(_key, ((_a, b), c))| (0, (b, c)))
+        .reduce(|_key, input, output| {
+            for ((from, to), _t) in input {
+                output.push((
+                    format!("({}, {}) -> ({}, {})", from.id, from.name, to.id, to.name),
+                    1,
+                ))
+            }
+        })
+        .map(|(_key, x)| x)
+        .inspect(|x| println!("Dataflow: {:?}", x));
+}
 
 fn main() {
     // the number of workers in the computation we're examining
@@ -38,34 +94,9 @@ fn main() {
         // define a new computation.
         worker.dataflow(|scope| {
             let stream = replayers.replay_into(scope);
-
             stream.inspect(|x| println!("{:?}", x));
 
-            // let _operates = stream
-            //     .flat_map(|(t, _, x)| {
-            //         if let Operates(event) = x {
-            //             Some((event, t, 1 as isize))
-            //         } else {
-            //             None
-            //         }
-            //     })
-            //     .as_collection()
-            //     // only keep elements that came from worker 0
-            //     // (the first element of "addr" is the worker id)
-            //     .filter(|x| *x.addr.first().unwrap() == 0)
-            //     .inspect(|x| println!("Operates: {:?}", x));
-
-            // let _channels = stream
-            //     .flat_map(|(t, _, x)| {
-            //         if let Channels(event) = x {
-            //             Some((event, t, 1 as isize))
-            //         } else {
-            //             None
-            //         }
-            //     })
-            //     .as_collection()
-            //     .filter(|x| *x.scope_addr.first().unwrap() == 0)
-            //     .inspect(|x| println!("Channels: {:?}", x));
+            reconstruct_dataflow(stream);
         });
 
         // stall application
