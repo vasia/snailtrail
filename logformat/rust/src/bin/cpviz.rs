@@ -84,7 +84,7 @@ fn convert(logfile: &str, json: &str, skip: Option<usize>, take: Option<usize>) 
             EventType::Start | EventType::Sent => {
                 let event = object!{
                     "worker" => w_id,
-                    "start" => ts,
+                    "start" => format!("{:?}", ts),
                     "type" => activity_type,
                     "corr_id" => corr_id
                 };
@@ -93,7 +93,7 @@ fn convert(logfile: &str, json: &str, skip: Option<usize>, take: Option<usize>) 
             EventType::End | EventType::Received => {
                 if let Some(ref event) = open_edges.get(&corr_id) {
                     let mut write_event = (*event).clone();
-                    write_event["end"] = JsonValue::from(ts);
+                    write_event["end"] = JsonValue::from(format!("{:?}", ts));
                     write_event["remote"] = JsonValue::from(w_id);
                     writer.write(&write_event)?;
                 }

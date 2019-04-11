@@ -136,7 +136,7 @@ fn convert(logfile: &str, json: &str) -> Result<()> {
     records.sort_by_key(|rec| rec.timestamp);
 
     for record in records {
-        let ts = record.timestamp as f64 / 1_000.0; // ns -> us
+        let ts = record.timestamp.as_micros();
         let name = format!("{:?}", record.activity_type);
         let tid = record.local_worker;
         let pid = 0;
@@ -149,7 +149,7 @@ fn convert(logfile: &str, json: &str) -> Result<()> {
         let mut event = object!{
             "name" => name,
             "cat" => cat,
-            "ts" => ts,
+            "ts" => format!("{:?}", ts),
             "tid" => tid,
             "pid" => pid,
             "args" => args
