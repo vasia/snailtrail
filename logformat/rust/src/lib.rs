@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 // Copyright 2017 ETH Zurich. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
@@ -6,7 +8,12 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-///! Data structure and (de)serialization for a `LogRecord`
+//! Data structure for a `LogRecord`.
+//! A `LogRecord` constitutes the unified `struct` representation of
+//! log messages from various stream processors.
+//!
+//! It is the underlying structure from which the PAG construction starts.
+//! If necessary, it can also be serialized e.g. into a `msgpack` representation.
 
 
 #[macro_use]
@@ -22,23 +29,40 @@ use rmp as msgpack;
 
 #[derive(Primitive, Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
 pub enum ActivityType {
+    /// Input introduced to the dataflow
     Input = 1,
+    /// Data buffered at an operator (?)
     Buffer = 2,
+    /// Operator scheduled for work
     Scheduling = 3,
+    /// Operator actually doing work
     Processing = 4,
+    /// ?
     BarrierProcessing = 5,
+    /// Data serialization
     Serialization = 6,
+    /// Data deserialization
     Deserialization = 7,
+    /// ?
     FaultTolerance = 8,
+    /// Control messages, e.g. about progress
     ControlMessage = 9,
+    /// Data messages, e.g. moving tuples around
     DataMessage = 10,
-    // Should not be emitted by instrumentation; inserted during PAG construction.
+    /// Unknown message, used during PAG construction
+    /// (not emitted by profiling)
     Unknown = 11,
+    /// Waiting for unblocking
+    /// (not emitted by profiling)
     Waiting = 12,
+    /// ?
+    /// (not emitted by profiling)
     BusyWaiting = 13,
 }
 
 impl ActivityType {
+    /// Mapps activity types to whether this activity is local
+    /// to a worker
     pub fn is_worker_local(&self) -> bool {
         match *self {
             ActivityType::Input => true,
@@ -50,6 +74,7 @@ impl ActivityType {
             ActivityType::Deserialization => true,
             ActivityType::FaultTolerance => false,
             ActivityType::ControlMessage => false,
+            // @TODO: In timely, these can be both!
             ActivityType::DataMessage => false,
             ActivityType::Unknown => true,
             ActivityType::Waiting => true,
@@ -58,12 +83,20 @@ impl ActivityType {
     }
 }
 
+/// What "side" of the event did we log? E.g., for
+/// scheduling events, it might be the start or end of the event;
+/// for messages, we might log the sender or receiver.
 #[derive(Primitive, Abomonation, PartialEq, Debug, Hash, Clone, Copy)]
 pub enum EventType {
+    /// Start of an event (e.g. Scheduling)
     Start = 1,
+    /// End of an event (e.g. Scheduling)
     End = 2,
+    /// Sender end of an event (e.g. a data message)
     Sent = 3,
+    /// Receiver end of an event (e.g. a data message)
     Received = 4,
+    /// Some event that doesn't make sense
     Bogus = 5,
 }
 
@@ -85,30 +118,45 @@ impl<'a> From<&'a str> for LogReadError {
     }
 }
 
-pub type Worker = u32;
-pub type Timestamp = u64;
+/// A worker ID
+pub type Worker = usize;
+/// An event timestamp
+pub type Timestamp = std::time::Duration;
+/// Type used as identifiers for (mapping between) two event sides
 pub type CorrelatorId = u64;
-pub type OperatorId = u32;
+/// A worker-local operator ID
+pub type OperatorId = usize;
+/// A worker-local channel ID
+pub type ChannelId = usize;
 
 // ***************************************************************************
 // * Please always update tests and java/c++ code after changing the schema. *
 // ***************************************************************************
+
+/// A `LogRecord` constitutes the unified `struct` representation of
+/// log messages from various stream processors.
+///
+/// It is the underlying structure from which the PAG construction starts.
+/// If necessary, it can also be serialized e.g. into a `msgpack` representation.
 #[derive(Abomonation, PartialEq, Hash, Debug, Clone)]
 pub struct LogRecord {
-    // Event time in nanoseconds since the Epoch (midnight, January 1, 1970 UTC).
+    /// Event time in nanoseconds since the Epoch (midnight, January 1, 1970 UTC).
     pub timestamp: Timestamp,
-    // Context this event occured in; denotes which of the parallel timelines it belongs to.
+    /// Context this event occured in; denotes which of the parallel timelines it belongs to.
     pub local_worker: Worker,
-    // Describes the instrumentation point which triggered this event.
+    /// Describes the instrumentation point which triggered this event.
     pub activity_type: ActivityType,
-    // Identifies which end of an edge this program event belongs to (beginning or end).
+    /// Identifies which end of an edge this program event belongs to.
+    /// E.g. start or end for scheduling, sent or received for communication events.
     pub event_type: EventType,
-    // Opaque label used to group the two records belonging to a program activity.
+    /// Opaque label used to group the two records belonging to a program activity.
     pub correlator_id: Option<CorrelatorId>,
-    // Similar to `local_worker` but specifies the worker ID for the other end of a sent/received message.
+    /// Similar to `local_worker` but specifies the worker ID for the other end of a sent/received message.
     pub remote_worker: Option<Worker>,
-    // Unique id for the operator in the dataflow
+    /// Unique id for the operator in the dataflow. This only applies for some event types, e.g. scheduling or processing.
     pub operator_id: Option<OperatorId>,
+    /// Unique id for the channel in the dataflow. This only applies for some event types, e.g. data / control messages.
+    pub channel_id: Option<ChannelId>
 }
 
 impl LogRecord {
