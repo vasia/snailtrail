@@ -7,10 +7,16 @@
 //! dump to be read back in by the [timely adapter](timely_adapter).
 
 use differential_dataflow::input::InputSession;
+use differential_dataflow::operators::reduce::Reduce;
 
 use timely::communication::allocator::Generic;
 use timely::logging::{Logger, TimelyEvent};
 use timely::worker::Worker;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::operator::Operator;
+use timely::dataflow::operators::probe::Probe;
+use timely::dataflow::operators::CapabilityRef;
+use timely::dataflow::operators::Capability;
 
 /// capture timely log messages to file. Alternatively use `TIMELY_WORKER_LOG_ADDR`.
 fn register_file_dumper(worker: &mut Worker<Generic>) {
@@ -68,9 +74,47 @@ fn main() {
             // create a new collection from our input.
             let input_coll = input.to_collection(scope);
 
+            let mut vector: Vec<(usize, usize, usize)> = Vec::new();
+
             input_coll
-                .map(|x| x)
-                .inspect(|(x, t, diff)| println!("w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .inspect(|(x, t, diff)| println!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .map(|x| (0, x))
+                .reduce(|_key, input, output| {
+                    let mut sum = 0;
+                    for (x, diff) in input {
+                        for i in 0..*diff {
+                            if i >= 0 {
+                                sum += *x;
+                            }
+                        }
+                    }
+                    output.push((sum * 100, 1))
+                })
+                .inspect(|(x, t, diff)| println!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .inner
+                // .unary_notify(Pipeline, "example", None, move |input, output, notificator| {
+                //     input.for_each(|time: CapabilityRef<usize>, data| {
+                //         data.swap(&mut vector);
+                //         output.session(&time).give_vec(&mut vector);
+                //         notificator.notify_at(time.retain());
+                //     });
+                //     notificator.for_each(|time, _cnt, _not| {
+                //         println!("notified at {:?}", time.time());
+                //     });
+                // })
+                .unary(Pipeline, "example", |default_cap: Capability<usize>, _info| {
+                    let mut cap = Some(default_cap.delayed(&12));
+                    let mut vector = Vec::new();
+                    move |input, output| {
+                        if let Some(ref c) = cap.take() {
+                            output.session(&c).give(((100, 100), 0, 0));
+                        }
+                        while let Some((time, data)) = input.next() {
+                            data.swap(&mut vector);
+                            output.session(&time).give_vec(&mut vector);
+                        }
+                    }
+                })
                 .probe()
         });
 
@@ -78,7 +122,6 @@ fn main() {
         let rounds = 2;
         // let batch = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
         // let rounds = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
-        println!("batch: {}, rounds: {}", batch, rounds);
 
         // handle to `timely` events logger
         let timely_logger = worker
@@ -96,7 +139,7 @@ fn main() {
         for round in 0..rounds {
             for i in 0..batch {
                 if worker.index() == i % worker.peers() {
-                    input.insert(i);
+                    input.insert((round + 1) * i);
                 }
             }
 
