@@ -89,7 +89,7 @@ impl ActivityType {
 /// What "side" of the event did we log? E.g., for
 /// scheduling events, it might be the start or end of the event;
 /// for messages, we might log the sender or receiver.
-#[derive(Primitive, Abomonation, PartialEq, Debug, Hash, Clone, Copy)]
+#[derive(Primitive, Abomonation, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Clone, Copy)]
 pub enum EventType {
     /// Start of an event (e.g. Scheduling)
     Start = 1,
@@ -144,7 +144,7 @@ pub type ChannelId = usize;
 ///
 /// It is the underlying structure from which the PAG construction starts.
 /// If necessary, it can also be serialized e.g. into a `msgpack` representation.
-#[derive(Abomonation, PartialEq, Hash, Debug, Clone)]
+#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone, PartialOrd, Ord)]
 pub struct LogRecord {
     /// Event time in nanoseconds since the Epoch (midnight, January 1, 1970 UTC).
     pub timestamp: Timestamp,
