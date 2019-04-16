@@ -523,7 +523,7 @@ pub fn build_dataflow<S>
                         let w = edge.weight();
                         let window_size_ns = config.window_size_ns;
                         let window_start_time = time.time();
-                        let crosses_start = edge.source_timestamp() == Duration::from_nanos(window_start_time * window_size_ns - 1);
+                        let crosses_start = edge.source_timestamp() == Duration::from_nanos(window_start_time * window_size_ns); // @TODO bounds - 1);
                         let crosses_end = edge.destination_timestamp() ==
                             Duration::from_nanos(window_start_time * window_size_ns + window_size_ns);
                         let crosses = match (crosses_start, crosses_end) {

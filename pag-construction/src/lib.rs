@@ -283,7 +283,8 @@ fn create_initial_pag_edges(worker_id: Worker,
     // the window boundary and first/last activity in the wait state analysis
     // to insert Unknown/Waiting activities accordingly.
     timeline.push(LogRecord {
-        timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns - 1) as u64),
+        // @TODO: for first this crashes
+        timestamp: window_start_time * window_size_ns, // - Duration::new(0, 1),
         local_worker: worker_id,
         activity_type: ActivityType::Unknown,
         event_type: EventType::Bogus,
