@@ -171,6 +171,7 @@ impl<S: Scope<Timestamp = u64>> DumpPAG<S> for Stream<S, PagOutput> {
                                 (false, false) => EventType::End,
                             },
                             correlator_id: Some(correlator_id),
+                            channel_id: None,
                         }
                     }
                     let mut correlator_id: u64 = 1;

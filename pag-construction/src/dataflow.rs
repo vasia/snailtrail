@@ -279,7 +279,7 @@ pub fn build_dataflow<S>
     }
     let pag_output = stream.build_program_activity_graph(Duration::from_nanos(config.threshold),
                                                          config.waiting_message,
-                                                         config.window_size_ns,
+                                                         config.window_size_ns as u32,
                                                          config.insert_waiting_edges);
 
     let probe_pag = pag_output.filter(|_| false).exchange(|_| 0).probe();

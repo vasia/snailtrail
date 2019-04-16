@@ -275,7 +275,7 @@ impl<S: Scope, D: ExchangeData> MapEpoch<S, D> for Stream<S, D>
 
 fn create_initial_pag_edges(worker_id: Worker,
                             mut timeline: Vec<LogRecord>,
-                            window_size_ns: u128,
+                            window_size_ns: u32,
                             window_start_time: Duration)
                             -> Vec<Timeline> {
     // We insert two records just before and after the window boundaries.
@@ -294,7 +294,7 @@ fn create_initial_pag_edges(worker_id: Worker,
         channel_id: None,
     });
     timeline.push(LogRecord {
-        timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns + window_size_ns) as u64),
+        timestamp: window_start_time * window_size_ns + Duration::new(0, window_size_ns),
         local_worker: worker_id,
         activity_type: ActivityType::Unknown,
         event_type: EventType::Bogus,
@@ -396,7 +396,7 @@ fn create_initial_pag_edges(worker_id: Worker,
                     // Terminate the activity and set start to last emitted time
                     let prev = if last_end.is_none() {
                         LogRecord {
-                            timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns) as u64),
+                            timestamp: window_start_time * window_size_ns,
                             ..record
                         }
                     } else {
@@ -442,7 +442,7 @@ fn create_initial_pag_edges(worker_id: Worker,
         let prev = last_end.as_ref().unwrap_or(top);
 
         let record = LogRecord {
-            timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns + window_size_ns) as u64),
+            timestamp: window_start_time * window_size_ns + Duration::new(0, window_size_ns),
             ..*top
         };
         if prev.timestamp < record.timestamp {
@@ -629,7 +629,7 @@ trait WorkerTimelines<S: Scope> {
     // reasonable starting value.
     fn build_worker_timelines(&self,
                               unknown_threshold: Duration,
-                              window_size_ns: u64,
+                              window_size_ns: u32,
                               insert_waitig_edges: bool)
                               -> Stream<S, PagOutput>;
 }
@@ -637,7 +637,7 @@ trait WorkerTimelines<S: Scope> {
 impl<S: Scope<Timestamp = u64>> WorkerTimelines<S> for Stream<S, LogRecord> {
     fn build_worker_timelines(&self,
                               unknown_threshold: Duration,
-                              window_size_ns: u64,
+                              window_size_ns: u32,
                               insert_waitig_edges: bool)
                               -> Stream<S, PagOutput> {
         let mut timelines_per_epoch = HashMap::new();
@@ -664,7 +664,7 @@ impl<S: Scope<Timestamp = u64>> WorkerTimelines<S> for Stream<S, LogRecord> {
                         // (quantization) to eliminate gaps and merge log records which are in
                         // close proximity in terms of event time.
 
-                        let initial_timeline = create_initial_pag_edges(worker_id, raw_timeline, window_size_ns as u128, Duration::from_nanos(*time.time()));
+                        let initial_timeline = create_initial_pag_edges(worker_id, raw_timeline, window_size_ns, Duration::from_nanos(*time.time()));
 
                         let final_timeline = connect_pag_and_apply_wait_analysis(initial_timeline, unknown_threshold, insert_waitig_edges);
 
@@ -690,26 +690,26 @@ trait PairUpEvents<S: Scope> {
     fn pair_up_events(&self,
                       start_type: EventType,
                       end_type: EventType,
-                      window_size_ns: u64)
+                      window_size_ns: u32)
                       -> Stream<S, Timeline>;
 
     fn pair_up_events_and_check<F>(&self,
                                    start_type: EventType,
                                    end_type: EventType,
-                                   window_size_ns: u64,
+                                   window_size_ns: u32,
                                    assert_fn: F)
                                    -> Stream<S, Timeline>
         where F: Fn(&LogRecord, &LogRecord) -> () + 'static;
 }
 
 impl<S: Scope<Timestamp = u64>, K: ExchangeData+Eq+Hash> PairUpEvents<S> for Stream<S, (K, LogRecord)> {
-    fn pair_up_events(&self, start_type: EventType, end_type: EventType, window_size_ns: u64) -> Stream<S, Timeline> {
+    fn pair_up_events(&self, start_type: EventType, end_type: EventType, window_size_ns: u32) -> Stream<S, Timeline> {
 self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _recv| {
 /* no assertion */
 })
     }
 
-    fn pair_up_events_and_check<F>(&self, start_type: EventType, end_type: EventType, window_size_ns: u64, assert_fn: F) -> Stream<S, Timeline>
+    fn pair_up_events_and_check<F>(&self, start_type: EventType, end_type: EventType, window_size_ns: u32, assert_fn: F) -> Stream<S, Timeline>
         where F: Fn(&LogRecord, &LogRecord) -> () + 'static
     {
         let paired = self.aggregate::<_, (Option<LogRecord>, Vec<LogRecord>), _, _, _>(
@@ -744,7 +744,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                         worker_id: start.local_worker,
                                     },
                                     destination: PagNode {
-                                        timestamp: Duration::from_nanos(time.time() * window_size_ns + window_size_ns),
+                                        timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 + window_size_ns as u64),
                                         worker_id: start.remote_worker.expect("comm w/o remote worker"),
                                     },
                                     edge_type: start.activity_type,
@@ -752,7 +752,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                     traverse: TraversalType::Undefined,
                                 }));
                                 session.give(Timeline::Remote(LogRecord {
-                                    timestamp: Duration::from_nanos(time.time() * window_size_ns + window_size_ns),
+                                    timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 + window_size_ns as u64),
                                     local_worker: start.remote_worker.unwrap(),
                                     remote_worker: Some(start.local_worker),
                                     ..start
@@ -791,7 +791,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                             for end in ends {
                                 session.give(Timeline::Local(PagEdge {
                                     source: PagNode {
-                                        timestamp: Duration::from_nanos(time.time() * window_size_ns - 1),
+                                        timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 - 1),
                                         worker_id: end.remote_worker.expect("comm w/o remote worker"),
                                     },
                                     destination: PagNode {
@@ -803,7 +803,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                     traverse: TraversalType::Undefined,
                                 }));
                                 session.give(Timeline::Remote(LogRecord {
-                                    timestamp: Duration::from_nanos(time.time() * window_size_ns - 1),
+                                    timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 - 1),
                                     local_worker: end.remote_worker.unwrap(),
                                     remote_worker: Some(end.local_worker),
                                     ..end
@@ -827,7 +827,7 @@ pub trait BuildProgramActivityGraph<S: Scope> {
     fn build_program_activity_graph(&self,
                                     threshold: Duration,
                                     delayed_message_threshold: u64,
-                                    window_size_ns: u64,
+                                    window_size_ns: u32,
                                     insert_waitig_edges: bool)
                                     -> Stream<S, PagOutput>;
 }
@@ -838,7 +838,7 @@ impl<S> BuildProgramActivityGraph<S> for Stream<S, LogRecord>
     fn build_program_activity_graph(&self,
                                     threshold: Duration,
                                     delayed_message_threshold: u64,
-                                    window_size_ns: u64,
+                                    window_size_ns: u32,
                                     insert_waitig_edges: bool)
                                     -> Stream<S, PagOutput> {
         let input = self;
