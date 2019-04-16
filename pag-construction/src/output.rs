@@ -9,6 +9,7 @@
 use std;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::time::Duration;
 
 use timely::dataflow::{Scope, Stream};
 use timely::dataflow::operators::{Filter, Map, Inspect};
@@ -49,7 +50,7 @@ impl DumpPAGFormatting for PagEdge {
     }
 }
 
-impl<S: Scope<Timestamp = u64>> DumpPAG<S> for Stream<S, PagOutput> {
+impl<S: Scope<Timestamp = Duration>> DumpPAG<S> for Stream<S, PagOutput> {
     fn dump_graph(&self, prefix: &str) -> Stream<S, PagOutput> {
         let prefix = prefix.to_owned();
         let mut pag_per_epoch = HashMap::new();

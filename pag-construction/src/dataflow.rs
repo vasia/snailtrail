@@ -48,7 +48,7 @@ pub struct Config {
     pub timely_args: Vec<String>,
     pub log_path: String,
     pub threshold: u64,
-    pub window_size_ns: u64,
+    pub window_size_ns: u32,
     pub epochs: u64,
     pub message_delay: Option<u64>,
     pub verbose: u64,
@@ -120,17 +120,17 @@ enum ActivityWorkers {
 }
 
 struct ProbeWrapper {
-    probe: ProbeHandle<u64>,
+    probe: ProbeHandle<Duration>,
     name: String,
-    current: u64,
+    current: Duration,
 }
 
 impl ProbeWrapper {
-    pub fn new(name: String, probe: ProbeHandle<u64>) -> Self {
+    pub fn new(name: String, probe: ProbeHandle<Duration>) -> Self {
         ProbeWrapper {
             probe,
             name,
-            current: 0,
+            current: Duration::new(0,0),
         }
     }
 
@@ -141,29 +141,29 @@ impl ProbeWrapper {
                      self.current,
                      time::precise_time_ns());
             // probe is past
-            self.current += 1;
+            self.current += Duration::new(0, 1);
         }
     }
 
-    pub fn set_current(&mut self, new_current: u64) {
+    pub fn set_current(&mut self, new_current: Duration) {
         self.current = new_current;
     }
 }
 
-fn feed_input<A: Allocate>(mut input: InputHandle<u64, LogRecord>,
+fn feed_input<A: Allocate>(mut input: InputHandle<Duration, LogRecord>,
               input_records: Vec<LogRecord>,
               mut probes: Vec<ProbeWrapper>,
               computation: &mut Worker<A>,
-              window_size_ns: u64,
-              epochs: u64) {
+              window_size_ns: u32,
+              epochs: Duration) {
     let mut last_probe = probes.pop().expect("last probe has to exist");
 
-    let mut old_epoch = 0;
+    let mut old_epoch = Duration::new(0,0);
     let mut node_count = 0;
     let mut first = true;
     for rec in input_records {
         // Assign records to slices by rounding timestamps
-        let epoch = (rec.timestamp.as_nanos() / window_size_ns as u128) as u64;
+        let epoch = rec.timestamp / window_size_ns;
         if first {
             first = false;
             for probe in &mut probes {
@@ -171,7 +171,7 @@ fn feed_input<A: Allocate>(mut input: InputHandle<u64, LogRecord>,
             }
             last_probe.set_current(epoch);
             old_epoch = epoch;
-            input.advance_to(epoch - 1);
+            input.advance_to(epoch - Duration::new(0,1));
         }
         // Advance time (must increase monotonically)
         if input.epoch() < &epoch {
@@ -183,7 +183,7 @@ fn feed_input<A: Allocate>(mut input: InputHandle<u64, LogRecord>,
             // TODO: This will crash on timestamps < 3
             while last_probe
                       .probe
-                      .less_than(&(input.time() - epochs)) {
+                      .less_than(&(*input.time() - epochs)) {
                 for probe in &mut probes {
                     probe.print_and_advance();
                 }
@@ -220,11 +220,11 @@ fn feed_input<A: Allocate>(mut input: InputHandle<u64, LogRecord>,
 // real computation we'd read input in the background and allow the computation to progress by
 // continually making steps.
 fn read_and_execute_trace_from_file<A: Allocate>(log_path: &str,
-                                    input: InputHandle<u64, LogRecord>,
+                                    input: InputHandle<Duration, LogRecord>,
                                     probes: Vec<ProbeWrapper>,
                                     computation: &mut Worker<A>,
-                                    window_size_ns: u64,
-                                    epochs: u64,
+                                    window_size_ns: u32,
+                                    epochs: Duration,
                                     message_delay: Option<u64>) {
     let input_records = input::read_sorted_trace_from_file_and_cut_messages(log_path,
                                                                             message_delay);
@@ -271,7 +271,7 @@ pub fn build_dataflow<S>
     (config: Config,
      scope: &mut S)
      -> (InputHandle<S::Timestamp, LogRecord>, Vec<ProbeHandle<S::Timestamp>>)
-    where S: Scope<Timestamp = u64> + Input
+    where S: Scope<Timestamp = Duration> + Input
 {
     let (input, stream) = scope.new_input();
     if false {
@@ -523,9 +523,9 @@ pub fn build_dataflow<S>
                         let w = edge.weight();
                         let window_size_ns = config.window_size_ns;
                         let window_start_time = time.time();
-                        let crosses_start = edge.source_timestamp() == Duration::from_nanos(window_start_time * window_size_ns); // @TODO bounds - 1);
+                        let crosses_start = edge.source_timestamp() == *window_start_time * window_size_ns; // @TODO bounds - 1);
                         let crosses_end = edge.destination_timestamp() ==
-                            Duration::from_nanos(window_start_time * window_size_ns + window_size_ns);
+                            *window_start_time * window_size_ns + Duration::new(0, window_size_ns);
                         let crosses = match (crosses_start, crosses_end) {
                             (true, true) => 'B',
                             (true, false) => 'S',
@@ -573,7 +573,7 @@ pub fn build_dataflow<S>
                                    ActivityWorkers::Local(w_id) => format!("{},{}", w_id, w_id),
                                    ActivityWorkers::Remote(src, dst) => format!("{},{}", src, dst),
                                };
-                               let data = format!("{},{},{},{},{},{},{},{},{}",
+                               let data = format!("{:?},{},{},{},{},{},{},{},{}",
                                                   ts,
                                                   activity_type,
                                                   operator_id,

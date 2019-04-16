@@ -634,7 +634,7 @@ trait WorkerTimelines<S: Scope> {
                               -> Stream<S, PagOutput>;
 }
 
-impl<S: Scope<Timestamp = u64>> WorkerTimelines<S> for Stream<S, LogRecord> {
+impl<S: Scope<Timestamp = Duration>> WorkerTimelines<S> for Stream<S, LogRecord> {
     fn build_worker_timelines(&self,
                               unknown_threshold: Duration,
                               window_size_ns: u32,
@@ -664,7 +664,7 @@ impl<S: Scope<Timestamp = u64>> WorkerTimelines<S> for Stream<S, LogRecord> {
                         // (quantization) to eliminate gaps and merge log records which are in
                         // close proximity in terms of event time.
 
-                        let initial_timeline = create_initial_pag_edges(worker_id, raw_timeline, window_size_ns, Duration::from_nanos(*time.time()));
+                        let initial_timeline = create_initial_pag_edges(worker_id, raw_timeline, window_size_ns, *time.time());
 
                         let final_timeline = connect_pag_and_apply_wait_analysis(initial_timeline, unknown_threshold, insert_waitig_edges);
 
@@ -702,7 +702,7 @@ trait PairUpEvents<S: Scope> {
         where F: Fn(&LogRecord, &LogRecord) -> () + 'static;
 }
 
-impl<S: Scope<Timestamp = u64>, K: ExchangeData+Eq+Hash> PairUpEvents<S> for Stream<S, (K, LogRecord)> {
+impl<S: Scope<Timestamp = Duration>, K: ExchangeData+Eq+Hash> PairUpEvents<S> for Stream<S, (K, LogRecord)> {
     fn pair_up_events(&self, start_type: EventType, end_type: EventType, window_size_ns: u32) -> Stream<S, Timeline> {
 self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _recv| {
 /* no assertion */
@@ -744,7 +744,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                         worker_id: start.local_worker,
                                     },
                                     destination: PagNode {
-                                        timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 + window_size_ns as u64),
+                                        timestamp: *time.time() * window_size_ns + Duration::new(0, window_size_ns),
                                         worker_id: start.remote_worker.expect("comm w/o remote worker"),
                                     },
                                     edge_type: start.activity_type,
@@ -752,7 +752,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                     traverse: TraversalType::Undefined,
                                 }));
                                 session.give(Timeline::Remote(LogRecord {
-                                    timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 + window_size_ns as u64),
+                                    timestamp: *time.time() * window_size_ns  + Duration::new(0, window_size_ns),
                                     local_worker: start.remote_worker.unwrap(),
                                     remote_worker: Some(start.local_worker),
                                     ..start
@@ -791,7 +791,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                             for end in ends {
                                 session.give(Timeline::Local(PagEdge {
                                     source: PagNode {
-                                        timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 - 1),
+                                        timestamp: *time.time() * window_size_ns - Duration::new(0, 1),
                                         worker_id: end.remote_worker.expect("comm w/o remote worker"),
                                     },
                                     destination: PagNode {
@@ -803,7 +803,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                     traverse: TraversalType::Undefined,
                                 }));
                                 session.give(Timeline::Remote(LogRecord {
-                                    timestamp: Duration::from_nanos(time.time() * window_size_ns as u64 - 1),
+                                    timestamp: *time.time() * window_size_ns  - Duration::new(0, 1),
                                     local_worker: end.remote_worker.unwrap(),
                                     remote_worker: Some(end.local_worker),
                                     ..end
@@ -833,7 +833,7 @@ pub trait BuildProgramActivityGraph<S: Scope> {
 }
 
 impl<S> BuildProgramActivityGraph<S> for Stream<S, LogRecord>
-     where S: Scope<Timestamp = u64>
+     where S: Scope<Timestamp = Duration>
 {
     fn build_program_activity_graph(&self,
                                     threshold: Duration,

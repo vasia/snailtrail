@@ -11,6 +11,7 @@ use std::hash::Hash;
 use std::fmt::Debug;
 use std::ops::{AddAssign, Mul};
 use std::cmp::PartialOrd;
+use std::time::Duration;
 
 use timely::Data;
 use timely::ExchangeData;
@@ -47,13 +48,13 @@ pub trait ExtendedData: Data + Eq + Hash + Copy + Debug {}
 impl<T: Data + Eq + Hash + Copy + Debug> ExtendedData for T {}
 
 /// Methods to push stream timestamps around
-pub trait PushTime<S: Scope<Timestamp = u64>, D: Data> {
+pub trait PushTime<S: Scope<Timestamp = Duration>, D: Data> {
     /// Pushes a tuple's timestamp into its data, e.g. for exchanging based on timestamp
-    fn push_time(&self) -> Stream<S, (u64, D)>;
+    fn push_time(&self) -> Stream<S, (Duration, D)>;
 }
 
-impl<S: Scope<Timestamp = u64>, D: Data> PushTime<S, D> for Stream<S, D> {
-    fn push_time(&self) -> Stream<S, (u64, D)> {
+impl<S: Scope<Timestamp = Duration>, D: Data> PushTime<S, D> for Stream<S, D> {
+    fn push_time(&self) -> Stream<S, (Duration, D)> {
         let mut vector = Vec::new();
         self.unary(Pipeline, "PushTime", move |_, _| {
             move |input, output| {
@@ -71,7 +72,7 @@ impl<S: Scope<Timestamp = u64>, D: Data> PushTime<S, D> for Stream<S, D> {
 
 /// Compute the edge betweeness centrality for a generic graph.
 pub trait BetweennessCentrality<G, N, D1>
-    where G: Scope<Timestamp = u64>,
+    where G: Scope<Timestamp = Duration>,
           N: ExtendedData + Partitioning,
           D1: SrcDst<N> + Data + Eq + Hash
 {
@@ -95,7 +96,7 @@ pub trait BetweennessCentrality<G, N, D1>
 }
 
 impl<G, N, D1> BetweennessCentrality<G, N, D1> for Stream<G, D1>
-    where G: Scope<Timestamp = u64>,
+    where G: Scope<Timestamp = Duration>,
           N: ExtendedData + Partitioning,
           D1: SrcDst<N> + Data + Eq + Hash + Debug + Send + ExchangeData
 {
@@ -107,9 +108,9 @@ impl<G, N, D1> BetweennessCentrality<G, N, D1> for Stream<G, D1>
         where E: Capacity<D1, DO>,
               DO: ExchangeData + AddAssign + Debug + Copy + Default + Mul + PartialOrd + ScaleReduce
     {
-        let forward_edges = forward_edges.push_time().exchange(|x| x.0).map(|x| x.1);
-        let backward_edges = backward_edges.push_time().exchange(|x| x.0).map(|x| x.1);
-        let graph_stream = self.push_time().exchange(|x| x.0).map(|x| x.1);
+        let forward_edges = forward_edges.push_time().exchange(|x| x.0.as_nanos() as u64).map(|x| x.1);
+        let backward_edges = backward_edges.push_time().exchange(|x| x.0.as_nanos() as u64).map(|x| x.1);
+        let graph_stream = self.push_time().exchange(|x| x.0.as_nanos() as u64).map(|x| x.1);
 
         let graph_stream_fwd = graph_stream.concat(&forward_edges.map(|(e, _)| e));
         let graph_stream_bwd = graph_stream.concat(&backward_edges.map(|(e, _)| e));
