@@ -16,6 +16,7 @@ use snailtrail::exploration::Capacity;
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::time::Duration;
 
 use timely::ExchangeData;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -105,7 +106,11 @@ pub struct PagEdge {
 
 impl PagEdge {
     pub fn weight(&self) -> u64 {
-        (self.destination.timestamp as i64 - self.source.timestamp as i64).abs() as u64
+        if self.destination.timestamp > self.source.timestamp {
+            (self.destination.timestamp - self.source.timestamp).as_nanos() as u64
+        } else {
+            (self.source.timestamp - self.destination.timestamp).as_nanos() as u64
+        }
     }
 
     pub fn is_message(&self) -> bool {
@@ -206,14 +211,14 @@ enum Timeline {
 }
 
 impl Timeline {
-    fn get_start_timestamp(&self) -> u64 {
+    fn get_start_timestamp(&self) -> Duration {
         match *self {
             Timeline::Local(ref edge) => edge.source.timestamp,
             Timeline::Remote(ref rec) => rec.timestamp,
         }
     }
 
-    fn get_end_timestamp(&self) -> u64 {
+    fn get_end_timestamp(&self) -> Duration {
         match *self {
             Timeline::Local(ref edge) => edge.destination.timestamp,
             Timeline::Remote(ref rec) => rec.timestamp,
@@ -230,7 +235,7 @@ impl Timeline {
     fn get_sort_key(&self) -> (logformat::Timestamp, logformat::Timestamp) {
         match *self {
             Timeline::Local(ref edge) => (edge.source.timestamp, edge.destination.timestamp),
-            Timeline::Remote(ref rec) => (rec.timestamp, 0),
+            Timeline::Remote(ref rec) => (rec.timestamp, Duration::new(0, 0)),
         }
     }
 }
@@ -270,31 +275,33 @@ impl<S: Scope, D: ExchangeData> MapEpoch<S, D> for Stream<S, D>
 
 fn create_initial_pag_edges(worker_id: Worker,
                             mut timeline: Vec<LogRecord>,
-                            window_size_ns: u64,
-                            window_start_time: logformat::Timestamp)
+                            window_size_ns: u128,
+                            window_start_time: Duration)
                             -> Vec<Timeline> {
     // We insert two records just before and after the window boundaries.
     // This will cause the analysis later on to include potential gaps between
     // the window boundary and first/last activity in the wait state analysis
     // to insert Unknown/Waiting activities accordingly.
     timeline.push(LogRecord {
-                      timestamp: window_start_time * window_size_ns - 1,
-                      local_worker: worker_id,
-                      activity_type: ActivityType::Unknown,
-                      event_type: EventType::Bogus,
-                      correlator_id: None,
-                      remote_worker: None,
-                      operator_id: None,
-                  });
+        timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns - 1) as u64),
+        local_worker: worker_id,
+        activity_type: ActivityType::Unknown,
+        event_type: EventType::Bogus,
+        correlator_id: None,
+        remote_worker: None,
+        operator_id: None,
+        channel_id: None,
+    });
     timeline.push(LogRecord {
-                      timestamp: window_start_time * window_size_ns + window_size_ns,
-                      local_worker: worker_id,
-                      activity_type: ActivityType::Unknown,
-                      event_type: EventType::Bogus,
-                      correlator_id: None,
-                      remote_worker: None,
-                      operator_id: None,
-                  });
+        timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns + window_size_ns) as u64),
+        local_worker: worker_id,
+        activity_type: ActivityType::Unknown,
+        event_type: EventType::Bogus,
+        correlator_id: None,
+        remote_worker: None,
+        operator_id: None,
+        channel_id: None,
+    });
 
     // Sort local events by timestamp
     timeline.sort_by_key(|record| record.timestamp);
@@ -388,7 +395,7 @@ fn create_initial_pag_edges(worker_id: Worker,
                     // Terminate the activity and set start to last emitted time
                     let prev = if last_end.is_none() {
                         LogRecord {
-                            timestamp: window_start_time * window_size_ns,
+                            timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns) as u64),
                             ..record
                         }
                     } else {
@@ -434,7 +441,7 @@ fn create_initial_pag_edges(worker_id: Worker,
         let prev = last_end.as_ref().unwrap_or(top);
 
         let record = LogRecord {
-            timestamp: window_start_time * window_size_ns + window_size_ns,
+            timestamp: Duration::from_nanos((window_start_time.as_nanos() * window_size_ns + window_size_ns) as u64),
             ..*top
         };
         if prev.timestamp < record.timestamp {
@@ -468,7 +475,7 @@ fn create_initial_pag_edges(worker_id: Worker,
 
 
 fn connect_pag_and_apply_wait_analysis(new_timeline: Vec<Timeline>,
-                                       unknown_threshold: u64,
+                                       unknown_threshold: Duration,
                                        insert_waitig_edges: bool)
                                        -> Vec<PagEdge> {
     // Perform another pass and splices in PAG edges with unknown activities to
@@ -498,12 +505,13 @@ fn connect_pag_and_apply_wait_analysis(new_timeline: Vec<Timeline>,
 
         let second_ts = second.get_start_timestamp();
         // Time difference between the two events currently analyzing
-        let delta_t = second_ts as i64 - first_ts as i64;
-
-        assert!(delta_t >= 0);
+        let delta_t = match second_ts.checked_sub(first_ts) {
+            Some(x) => x,
+            None => panic!("timestamps not ordered correctly")
+        };
 
         // Do we need to bridge the gap with what we have?
-        if delta_t < (unknown_threshold as i64) {
+        if delta_t < unknown_threshold {
             // move end and start
             match first {
                 Timeline::Local(ref mut left) => {
@@ -541,7 +549,7 @@ fn connect_pag_and_apply_wait_analysis(new_timeline: Vec<Timeline>,
                     }
                 }
             };
-        } else if delta_t >= (unknown_threshold as i64) {
+        } else if delta_t >= unknown_threshold {
             // Gap is bigger threshold, create Unknown or Waiting instead of adjusting ends
             fill_gap = true;
 
@@ -619,7 +627,7 @@ trait WorkerTimelines<S: Scope> {
     // have not tested with real traces but expect 1_000_000_000 (== 1 millisecond) to be a
     // reasonable starting value.
     fn build_worker_timelines(&self,
-                              unknown_threshold: u64,
+                              unknown_threshold: Duration,
                               window_size_ns: u64,
                               insert_waitig_edges: bool)
                               -> Stream<S, PagOutput>;
@@ -627,7 +635,7 @@ trait WorkerTimelines<S: Scope> {
 
 impl<S: Scope<Timestamp = u64>> WorkerTimelines<S> for Stream<S, LogRecord> {
     fn build_worker_timelines(&self,
-                              unknown_threshold: u64,
+                              unknown_threshold: Duration,
                               window_size_ns: u64,
                               insert_waitig_edges: bool)
                               -> Stream<S, PagOutput> {
@@ -655,7 +663,7 @@ impl<S: Scope<Timestamp = u64>> WorkerTimelines<S> for Stream<S, LogRecord> {
                         // (quantization) to eliminate gaps and merge log records which are in
                         // close proximity in terms of event time.
 
-                        let initial_timeline = create_initial_pag_edges(worker_id, raw_timeline, window_size_ns, *time.time());
+                        let initial_timeline = create_initial_pag_edges(worker_id, raw_timeline, window_size_ns as u128, Duration::from_nanos(*time.time()));
 
                         let final_timeline = connect_pag_and_apply_wait_analysis(initial_timeline, unknown_threshold, insert_waitig_edges);
 
@@ -735,7 +743,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                         worker_id: start.local_worker,
                                     },
                                     destination: PagNode {
-                                        timestamp: time.time() * window_size_ns + window_size_ns,
+                                        timestamp: Duration::from_nanos(time.time() * window_size_ns + window_size_ns),
                                         worker_id: start.remote_worker.expect("comm w/o remote worker"),
                                     },
                                     edge_type: start.activity_type,
@@ -743,7 +751,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                     traverse: TraversalType::Undefined,
                                 }));
                                 session.give(Timeline::Remote(LogRecord {
-                                    timestamp: time.time() * window_size_ns + window_size_ns,
+                                    timestamp: Duration::from_nanos(time.time() * window_size_ns + window_size_ns),
                                     local_worker: start.remote_worker.unwrap(),
                                     remote_worker: Some(start.local_worker),
                                     ..start
@@ -782,7 +790,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                             for end in ends {
                                 session.give(Timeline::Local(PagEdge {
                                     source: PagNode {
-                                        timestamp: time.time() * window_size_ns- 1,
+                                        timestamp: Duration::from_nanos(time.time() * window_size_ns - 1),
                                         worker_id: end.remote_worker.expect("comm w/o remote worker"),
                                     },
                                     destination: PagNode {
@@ -794,7 +802,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
                                     traverse: TraversalType::Undefined,
                                 }));
                                 session.give(Timeline::Remote(LogRecord {
-                                    timestamp: time.time() * window_size_ns - 1,
+                                    timestamp: Duration::from_nanos(time.time() * window_size_ns - 1),
                                     local_worker: end.remote_worker.unwrap(),
                                     remote_worker: Some(end.local_worker),
                                     ..end
@@ -816,7 +824,7 @@ self.pair_up_events_and_check(start_type, end_type, window_size_ns, |_sent, _rec
 
 pub trait BuildProgramActivityGraph<S: Scope> {
     fn build_program_activity_graph(&self,
-                                    threshold: u64,
+                                    threshold: Duration,
                                     delayed_message_threshold: u64,
                                     window_size_ns: u64,
                                     insert_waitig_edges: bool)
@@ -827,7 +835,7 @@ impl<S> BuildProgramActivityGraph<S> for Stream<S, LogRecord>
      where S: Scope<Timestamp = u64>
 {
     fn build_program_activity_graph(&self,
-                                    threshold: u64,
+                                    threshold: Duration,
                                     delayed_message_threshold: u64,
                                     window_size_ns: u64,
                                     insert_waitig_edges: bool)

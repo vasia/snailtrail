@@ -125,15 +125,15 @@ impl<'a> From<&'a str> for LogReadError {
 }
 
 /// A worker ID
-pub type Worker = usize;
+pub type Worker = u64;
 /// An event timestamp
 pub type Timestamp = std::time::Duration;
 /// Type used as identifiers for (mapping between) two event sides
 pub type CorrelatorId = u64;
 /// A worker-local operator ID
-pub type OperatorId = usize;
+pub type OperatorId = u64;
 /// A worker-local channel ID
-pub type ChannelId = usize;
+pub type ChannelId = u64;
 
 // ***************************************************************************
 // * Please always update tests and java/c++ code after changing the schema. *
@@ -236,19 +236,19 @@ impl LogRecord {
         let remote_worker =
             {
                 let val: i32 = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode remote_worker: {:?}", read_err))?;
-                if val == -1 { None } else { Some(val as usize) }
+                if val == -1 { None } else { Some(val as u64) }
             };
         let operator_id = {
             let val: i32 =
                 msgpack::decode::read_int(reader)
                     .map_err(|read_err| format!("cannot decode operator_id: {:?}", read_err))?;
-            if val == -1 { None } else { Some(val as usize) }
+            if val == -1 { None } else { Some(val as u64) }
         };
         let channel_id = {
             let val: i32 =
                 msgpack::decode::read_int(reader)
                     .map_err(|read_err| format!("cannot decode channel_id: {:?}", read_err))?;
-            if val == -1 { None } else { Some(val as usize) }
+            if val == -1 { None } else { Some(val as u64) }
         };
 
         Ok(LogRecord {

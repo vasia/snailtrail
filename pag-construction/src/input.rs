@@ -8,6 +8,7 @@
 
 use std::fs::File;
 use std::io::BufReader;
+use std::time::Duration;
 use std::collections::{HashSet, HashMap};
 use logformat::{CorrelatorId, EventType, LogRecord, LogReadError, Timestamp, Worker};
 
@@ -53,8 +54,14 @@ pub fn read_sorted_trace_from_file_and_cut_messages(log_path: &str,
             if rec.event_type == EventType::Received {
                 let key = (rec.remote_worker.unwrap(), rec.local_worker, rec.correlator_id);
                 if let Some(timestamp) = send_stash.remove(&key) {
-                    if (rec.timestamp as i64 - timestamp as i64).abs() as u64 > message_delay {
-                        let new_timestamp = timestamp + message_delay;
+                    let delta = if rec.timestamp > timestamp {
+                        rec.timestamp - timestamp
+                    } else {
+                        timestamp - rec.timestamp
+                    };
+
+                    if delta > Duration::from_nanos(message_delay) {
+                        let new_timestamp = timestamp + Duration::from_nanos(message_delay);
                         rec.timestamp = new_timestamp;
                     }
                 }

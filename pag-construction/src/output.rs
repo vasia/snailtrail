@@ -153,10 +153,10 @@ impl<S: Scope<Timestamp = u64>> DumpPAG<S> for Stream<S, PagOutput> {
                         correlator_id: u64,
                         pag_node: PagNode,
                         activity_type: ActivityType,
-                        operator_id: Option<u32>,
+                        operator_id: Option<u64>,
                         is_message: bool,
                         is_start: bool,
-                        remote_worker: Option<u32>) -> LogRecord {
+                        remote_worker: Option<u64>) -> LogRecord {
 
                         LogRecord {
                             timestamp: pag_node.timestamp,
@@ -225,13 +225,13 @@ impl<S: Scope> DumpHistogram<S> for Stream<S, LogRecord>
                         if agg[0].event_type == EventType::Received {
                             agg.swap(0, 1);
                         }
-                        let first_ts = agg[0].timestamp as i64;
-                        let second_ts = agg[1].timestamp as i64;
-                        (second_ts - first_ts) / 100_000_000
+                        let first_ts = agg[0].timestamp.as_nanos();
+                        let second_ts = agg[1].timestamp.as_nanos();
+                        ((second_ts - first_ts) / 100_000_000) as u64
                     } else {
                         0
                     };
-                    (agg, tsdiff + u32::max_value() as i64)
+                    (agg, tsdiff + u32::max_value() as u64)
                 },
                 |key| key.unwrap_or(0)
             )

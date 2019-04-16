@@ -9,6 +9,7 @@
 use std;
 use std::collections::HashMap;
 use std::convert::From as StdFrom;
+use std::time::Duration;
 
 use rand::seq::SliceRandom;
 
@@ -162,7 +163,7 @@ fn feed_input<A: Allocate>(mut input: InputHandle<u64, LogRecord>,
     let mut first = true;
     for rec in input_records {
         // Assign records to slices by rounding timestamps
-        let epoch: u64 = rec.timestamp / window_size_ns;
+        let epoch = (rec.timestamp.as_nanos() / window_size_ns as u128) as u64;
         if first {
             first = false;
             for probe in &mut probes {
@@ -276,7 +277,7 @@ pub fn build_dataflow<S>
     if false {
         stream.dump_histogram();
     }
-    let pag_output = stream.build_program_activity_graph(config.threshold,
+    let pag_output = stream.build_program_activity_graph(Duration::from_nanos(config.threshold),
                                                          config.waiting_message,
                                                          config.window_size_ns,
                                                          config.insert_waiting_edges);
@@ -522,9 +523,9 @@ pub fn build_dataflow<S>
                         let w = edge.weight();
                         let window_size_ns = config.window_size_ns;
                         let window_start_time = time.time();
-                        let crosses_start = edge.source_timestamp() == window_start_time * window_size_ns - 1;
+                        let crosses_start = edge.source_timestamp() == Duration::from_nanos(window_start_time * window_size_ns - 1);
                         let crosses_end = edge.destination_timestamp() ==
-                            window_start_time * window_size_ns + window_size_ns;
+                            Duration::from_nanos(window_start_time * window_size_ns + window_size_ns);
                         let crosses = match (crosses_start, crosses_end) {
                             (true, true) => 'B',
                             (true, false) => 'S',
@@ -534,7 +535,7 @@ pub fn build_dataflow<S>
                         let edge_type = match edge {
                             PagOutput::Edge(ref e) => {
                                 (e.edge_type as u8,
-                                 e.operator_id.unwrap_or(std::u8::MAX as u32) as u8,
+                                 e.operator_id.unwrap_or(std::u16::MAX as u64) as u8,
                                  if e.edge_type.is_worker_local() {
                                      ActivityWorkers::Local(e.source.worker_id)
                                  } else {

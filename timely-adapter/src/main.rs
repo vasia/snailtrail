@@ -47,7 +47,7 @@ fn reconstruct_dataflow<S: Scope<Timestamp = Duration>>(
     stream: &mut Stream<S, (Duration, usize, TimelyEvent)>,
 ) {
     let operates = stream
-        .filter(|(_, worker, _)| *worker == 0 as usize)
+        .filter(|(_, worker, _)| *worker == 0)
         .flat_map(|(t, _worker, x)| {
             if let Operates(event) = x {
                 if event.addr.len() > 1 {
@@ -62,7 +62,7 @@ fn reconstruct_dataflow<S: Scope<Timestamp = Duration>>(
         .as_collection();
 
     stream
-        .filter(|(_, worker, _)| *worker == 0 as usize)
+        .filter(|(_, worker, _)| *worker == 0)
         .flat_map(|(t, _worker, x)| {
             if let Channels(event) = x {
                 Some(((event.source.0, event), t, 1))
@@ -103,9 +103,9 @@ impl<S: Scope> EventsToLogRecords<S> for Stream<S, (Duration, usize, TimelyEvent
                     Messages(event) => {
                         let remote_worker = if event.target != event.source {
                             if event.is_send {
-                                Some(event.target)
+                                Some(event.target as u64)
                             } else {
-                                Some(event.source)
+                                Some(event.source as u64)
                             }
                         } else { None };
 
@@ -117,13 +117,13 @@ impl<S: Scope> EventsToLogRecords<S> for Stream<S, (Duration, usize, TimelyEvent
 
                         Some((LogRecord {
                             timestamp: t,
-                            local_worker: wid,
+                            local_worker: wid as u64,
                             activity_type: ActivityType::DataMessage,
                             event_type,
                             correlator_id: None,
                             remote_worker,
                             operator_id: None,
-                            channel_id: Some(event.channel)
+                            channel_id: Some(event.channel as u64)
                         }, t, 1))
                     },
                     Schedule(event) => {
@@ -138,12 +138,12 @@ impl<S: Scope> EventsToLogRecords<S> for Stream<S, (Duration, usize, TimelyEvent
 
                         Some((LogRecord {
                             timestamp: t,
-                            local_worker: wid,
+                            local_worker: wid as u64,
                             activity_type: ActivityType::Scheduling,
                             event_type,
                             correlator_id: None,
                             remote_worker: None,
-                            operator_id: Some(event.id),
+                            operator_id: Some(event.id as u64),
                             channel_id: None,
                         }, t, 1))
                     },
@@ -163,19 +163,19 @@ impl<S: Scope> EventsToLogRecords<S> for Stream<S, (Duration, usize, TimelyEvent
                             if event.source == wid {
                                 None
                             } else {
-                                Some(event.source)
+                                Some(event.source as u64)
                             }
                         };
 
                         Some((LogRecord {
                             timestamp: t,
-                            local_worker: wid,
+                            local_worker: wid as u64,
                             activity_type: ActivityType::ControlMessage,
                             event_type,
                             correlator_id: None,
                             remote_worker,
                             operator_id: None,
-                            channel_id: Some(event.channel)
+                            channel_id: Some(event.channel as u64)
                         }, t, 1))
                     },
                     _ => None
@@ -212,7 +212,7 @@ impl<S: Scope> PeelOperators<S> for Collection<S, LogRecord, isize> where S::Tim
         let peeled = operates
             .antijoin(&operates_anti)
             .consolidate()
-            .map(|(_, x)| x.id);
+            .map(|(_, x)| x.id as u64);
 
         // all `LogRecord`s that have an `operator_id` that's not part of the lowest level
         let to_remove = self
