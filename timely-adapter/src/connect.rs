@@ -43,13 +43,17 @@ pub fn make_replayers(
         .collect::<Vec<_>>()
 }
 
+/// A replayer that reads data from a file to be streamed into timely
+pub type FileReplayer = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), File>;
+
 /// Construct replayers that read data from a file and can stream it into
 /// timely dataflow.
 pub fn make_file_replayers(
     index: usize,
     source_peers: usize,
     worker_peers: usize,
-) -> Vec<EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), File>> {
+) -> Vec<FileReplayer> {
+    println!("{}, {}, {}", index, source_peers, worker_peers);
     (0..source_peers)
         .filter(|i| i % worker_peers == index)
         .map(|i| {
