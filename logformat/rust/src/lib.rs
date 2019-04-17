@@ -48,9 +48,9 @@ pub enum ActivityType {
     Deserialization = 7,
     /// ?
     FaultTolerance = 8,
-    /// Control messages, e.g. about progress
+    /// remote control messages, e.g. about progress
     ControlMessage = 9,
-    /// Data messages, e.g. moving tuples around
+    /// remote data messages, e.g. moving tuples around
     DataMessage = 10,
     /// Unknown message, used during PAG construction
     /// (not emitted by profiling)
@@ -77,7 +77,6 @@ impl ActivityType {
             ActivityType::Deserialization => true,
             ActivityType::FaultTolerance => false,
             ActivityType::ControlMessage => false,
-            // @TODO: In timely, these can be both!
             ActivityType::DataMessage => false,
             ActivityType::Unknown => true,
             ActivityType::Waiting => true,
