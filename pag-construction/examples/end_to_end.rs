@@ -8,9 +8,9 @@
 
 // use std::str::FromStr;
 
-use pag_construction::dataflow::{Config, run_dataflow};
+use pag_construction::dataflow::{Config, end_to_end_analysis};
 
-const NS_TO_SEC: u64 = 1_000_000_000;
+const NS_TO_SEC: u32 = 1_000_000_000;
 
 fn main() {
     // NOTE: implement a dataflow program which constructs the program activity graph:
@@ -113,7 +113,7 @@ fn main() {
     //         .expect("Cannot read window size");
 
     let config = Config {
-        timely_args: vec![],
+        timely_args: vec!["-w".to_string(), "2".to_string()],
         log_path: "".to_string(), //String::from(matches.value_of("INPUT").expect("log input path required")),
         // threshold: u64::from_str(matches
         //                              .value_of("threshold")
@@ -143,8 +143,9 @@ fn main() {
         disable_summary: false, //matches.is_present("no-summary"),
         disable_bc: false, //matches.is_present("no-bc"),
         waiting_message: 0, //u64::from_str(matches.value_of("waiting-message").unwrap_or("0"))
+        source_peers: 2,
             // .expect("Cannot read waiting-message parameter"),
     };
 
-    run_dataflow(config).unwrap();
+    end_to_end_analysis(config).unwrap();
 }

@@ -103,6 +103,7 @@ enum ActivityWorkers {
 
 pub fn end_to_end_analysis(config: Config) -> Result<WorkerGuards<()>, String> {
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {
+        let timer = std::time::Instant::now();
         let config = config.clone();
         if worker.index() == 0 { println!("{:?}", config);}
 
@@ -115,10 +116,17 @@ pub fn end_to_end_analysis(config: Config) -> Result<WorkerGuards<()>, String> {
             let records: Collection<_, LogRecord, isize> = record_collection(scope, replayers);
 
             // PAG Analysis dataflow
-            build_dataflow(config.clone(), records, index)
+            // build_dataflow(config.clone(), records)
+            records
+                .inspect(|x| println!("{}", x.0))
+                .probe()
         });
 
-        probe.with_frontier(|f| println!("probe: {:?}", f.to_vec()));
+        while !probe.done() {
+            worker.step();
+        }
+        println!("done: {}s", timer.elapsed().as_secs());
+
         // provide input
         // if worker.index() == 0 {
         //     // create named probe wrappers
