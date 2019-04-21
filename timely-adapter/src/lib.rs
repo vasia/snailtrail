@@ -15,11 +15,12 @@
 #![deny(missing_docs)]
 
 pub mod connect;
-use crate::connect::{make_file_replayers, make_replayers, open_sockets, FileReplayer};
+use crate::connect::{make_file_replayers, make_replayers, open_sockets, Replayer};
 
 use logformat::{ LogRecord, EventType, ActivityType };
 
 use std::time::Duration;
+use std::io::Read;
 
 use timely::dataflow::operators::aggregation::Aggregate;
 use timely::dataflow::operators::capture::replay::Replay;
@@ -52,11 +53,13 @@ use differential_dataflow::operators::join::Join;
 use differential_dataflow::operators::reduce::{ Threshold, Reduce };
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::trace::TraceReader;
 
 /// Takes a stream of `TimelyEvent`s and returns a crude
 /// reconstructed String representation of its dataflow.
 fn reconstruct_dataflow<S: Scope<Timestamp = Duration>>(
-    stream: &mut Stream<S, (Duration, usize, TimelyEvent)>,
+    stream: &Stream<S, (Duration, usize, TimelyEvent)>,
 ) {
     let operates = stream
         .filter(|(_, worker, _)| *worker == 0)
@@ -108,18 +111,17 @@ pub trait EventsToLogRecords<S: Scope<Timestamp = Duration>> {
 
 impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Duration, usize, TimelyEvent)> {
     fn events_to_log_records(&self) -> Stream<S, (LogRecord, Duration, isize)> {
-
-        self.unary_frontier(Pipeline, "EpochalFlatMap", |capability, _info| {
+        self.unary_frontier(Pipeline, "EpochalFlatMap", |_capability, _info| {
             // This only works since we're sure that each worker replays a consistent
             // worker log. In other cases, we'd need to implement a smarter stateful operator.
-            let mut epoch = Duration::new(0, 0);
             let mut vector = Vec::new();
 
-            let mut retained = Some(capability);
+            let mut epoch = 0;
 
             move |input, output| {
                 input.for_each(|cap, data| {
-                    drop(cap);
+                    // drop the current capability
+                    let mut retained = cap.retain();
 
                     data.swap(&mut vector);
                     for (t, wid, x) in vector.drain(..) {
@@ -134,6 +136,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Durati
 
                                 Some((LogRecord {
                                     timestamp: t,
+                                    epoch,
                                     local_worker: wid as u64,
                                     activity_type: ActivityType::Scheduling,
                                     event_type,
@@ -141,7 +144,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Durati
                                     remote_worker: None,
                                     operator_id: Some(event.id as u64),
                                     channel_id: None,
-                                }, epoch, 1))
+                                }, t, 1))
                             },
                             // data messages
                             Messages(event) => {
@@ -163,6 +166,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Durati
 
                                     Some((LogRecord {
                                         timestamp: t,
+                                        epoch,
                                         local_worker: wid as u64,
                                         activity_type: ActivityType::DataMessage,
                                         event_type,
@@ -170,7 +174,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Durati
                                         remote_worker,
                                         operator_id: None,
                                         channel_id: Some(event.channel as u64)
-                                    }, epoch, 1))
+                                    }, t, 1))
                                 }
                             },
                             // Control Messages
@@ -195,104 +199,36 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Durati
 
                                     Some((LogRecord {
                                         timestamp: t,
+                                        epoch,
                                         local_worker: wid as u64,
                                         activity_type: ActivityType::ControlMessage,
                                         event_type,
                                         correlator_id: Some(event.seq_no as u64),
                                         remote_worker,
                                         operator_id: None,
-                                        channel_id: Some(event.channel as u64)
-                                    }, epoch, 1))
+                                        channel_id: Some(event.channel as u64),
+                                    }, t, 1))
                                 }
                             },
                             // epoch updates
                             Text(event) => {
-                                epoch += Duration::new(1, 0);
-                                // caps[0].downgrade(&epoch);
-                                if let Some(r) = retained.as_mut() {
-                                    r.downgrade(&epoch);
-                                }
+                                epoch += 1;
                                 None
                             },
                             _ => None
                         };
 
                         if let Some(record) = record {
-                            if let Some(r) = retained.as_mut() {
-                                let mut session = output.session(&r);
-                                session.give(record);
-                            }
+                            let mut session = output.session(&retained);
+                            session.give(record);
                         }
                     }
                 });
-
-                if input.frontier.is_empty() {
-                    retained = None;
-                }
             }
         },
         )
     }
 }
-
-/// Extracts Operates activities from a Stream of events
-pub trait EventsToOperates<S: Scope<Timestamp = Duration>> {
-    /// Extracts Operates activities from a Stream of events
-    fn events_to_operates(&self) -> Stream<S, ((Vec<usize>, OperatesEvent), Duration, isize)>;
-}
-
-impl<S: Scope<Timestamp = Duration>> EventsToOperates<S> for Stream<S, (Duration, usize, TimelyEvent)> {
-    fn events_to_operates(&self) -> Stream<S, ((Vec<usize>, OperatesEvent), Duration, isize)> {
-
-        self.unary_frontier(Pipeline, "OperatesExtractor", |capability, _info| {
-            // all Operates are collected at (0,0)
-            let mut epoch = Duration::new(0, 0);
-
-            let mut retained = Some(capability);
-
-            let mut vector = Vec::new();
-
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    drop(cap);
-
-                    data.swap(&mut vector);
-                    for (t, wid, x) in vector.drain(..) {
-                        let operates = match x {
-                            // Operates
-                            Operates(event) => {
-                                Some(((event.addr.clone(), event), epoch, 1))
-                            },
-                            // Text event marks the end of Operates activities
-                            Text(event) => {
-                                if epoch < Duration::new(1, 0) {
-                                    epoch = Duration::new(1, 0);
-                                    if let Some(r) = retained.as_mut() {
-                                        r.downgrade(&epoch);
-                                    }
-                                }
-                                None
-                            },
-                            _ => None,
-                        };
-
-                        if let Some(operates) = operates {
-                            if let Some(r) = retained.as_mut() {
-                                let mut session = output.session(&r);
-                                session.give(operates);
-                            }
-                        }
-                    }
-                });
-
-                if input.frontier.is_empty() {
-                    retained = None;
-                }
-            }
-        })
-    }
-}
-
 
 
 /// Strips a `Collection` of `LogRecord`s from encompassing operators.
@@ -301,14 +237,11 @@ pub trait PeelOperators<S: Scope<Timestamp = Duration>> {
     /// encompassing operators have been stripped off
     /// (e.g. the dataflow operator for every direct child,
     /// the surrounding iterate operators for loops)
-    fn peel_operators(&self, ops: &Stream<S, (Duration, usize, TimelyEvent)>) -> Collection<S, LogRecord, isize>;
+    fn peel_operators(&self, operates: &Collection<S, (Vec<usize>, OperatesEvent), isize>) -> Collection<S, LogRecord, isize>;
 }
 
 impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecord, isize> {
-    fn peel_operators(&self, ops: &Stream<S, (Duration, usize, TimelyEvent)>) -> Collection<S, LogRecord, isize> {
-        // all `Operates` events
-        let operates = ops.events_to_operates().as_collection();
-
+    fn peel_operators(&self, operates: &Collection<S, (Vec<usize>, OperatesEvent), isize>) -> Collection<S, LogRecord, isize> {
         // all `Operates` addresses with their inner-most level removed
         let operates_anti = operates
             .map(|(mut addr, _)| {
@@ -320,45 +253,90 @@ impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecor
         // all `Operates` operator ids that are at the lowest nesting level
         let peeled = operates
             .antijoin(&operates_anti)
-            .consolidate()
+            .inspect(|x| println!("before distinct"))
             .distinct()
+            .inspect(|x| println!("after distinct"))
             .map(|(_, x)| x.id as u64);
 
         // all `LogRecord`s that have an `operator_id` that's not part of the lowest level
         let to_remove = self
             .flat_map(|x| if let Some(id) = x.operator_id { Some((id, x.timestamp)) } else { None })
             .antijoin(&peeled)
-            .consolidate()
-            .map(|(id, ts)| ts)
-            .distinct();
+            .distinct()
+            .map(|(id, ts)| ts);
 
         // `LogRecord`s without records with `operator_id`s that aren't part of the lowest level
-        self
-            .map(|x| (x.timestamp, x))
+        self.map(|x| (x.timestamp, x))
             .antijoin(&to_remove)
+            .consolidate()
             .map(|(_, x)| x)
-            .distinct()
     }
 }
 
 
+/// log epoch at beginning
+trait LogEpoch<S: Scope<Timestamp = Duration>> {
+    /// log epoch at beginning
+    fn log_epoch(&self) -> Collection<S, LogRecord, isize>;
+}
+
+impl<S: Scope<Timestamp = Duration>> LogEpoch<S> for Collection<S, LogRecord, isize> {
+    fn log_epoch(&self) -> Collection<S, LogRecord, isize> {
+        self.inner
+            .unary(Pipeline, "epoch logger", |_default, _info| {
+                let mut vector = Vec::new();
+                let mut epoch = 0;
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        data.swap(&mut vector);
+                        let retained = cap.retain();
+                        let mut session = output.session(&retained);
+                        for (x, t, diff) in vector.drain(..) {
+                            if x.epoch > epoch {
+                                epoch = x.epoch;
+                                println!("epoch: {}", epoch);
+                            }
+                            session.give((x, t, diff));
+                        }
+                    })
+                }
+            })
+            .as_collection()
+    }
+}
+
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
 /// Should be called from within a dataflow.
-pub fn record_collection<S>(scope: &mut S, replayers: Vec<FileReplayer>) -> Collection<S, LogRecord, isize>
-where S: Scope<Timestamp = Duration> {
+pub fn record_collection<S, R>(scope: &mut S, replayers: Vec<Replayer<R>>) -> Collection<S, LogRecord, isize>
+where
+    S: Scope<Timestamp = Duration>,
+    R: Read + 'static,
+{
     let stream = replayers.replay_into(scope);
-    // stream.inspect(|x| println!("{:?}", x));
+    // reconstruct_dataflow(&stream);
 
-    // reconstruct_dataflow(&mut stream);
+    let mut operates_trace = stream
+        .flat_map(|(t, _wid, x)| {
+            if let Operates(event) = x {
+                Some(((event.addr.clone(), event), t, 1))
+            } else {
+                None
+            }
+        })
+        .as_collection()
+        .arrange_by_key()
+        .trace;
+    operates_trace.advance_by(&[]);
+    operates_trace.distinguish_since(&[]);
 
-    // print_messages(&mut stream);
+    let operates = operates_trace
+        .import(scope)
+        .as_collection(|k, v| (k.clone(), v.clone()));
 
     stream
-        // .inspect(|x| println!("0 {:?}", x))
         .events_to_log_records()
-        // .inspect(|x| println!("3 {:?}: {}", x.1, x.0))
         .as_collection()
-        .peel_operators(&stream)
-        .inspect(|x| println!("peeled: {:?}: {}", x.1, x.0))
+        .peel_operators(&operates)
+        .log_epoch()
 }
