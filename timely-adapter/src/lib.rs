@@ -237,25 +237,39 @@ pub trait PeelOperators<S: Scope<Timestamp = Duration>> {
     /// encompassing operators have been stripped off
     /// (e.g. the dataflow operator for every direct child,
     /// the surrounding iterate operators for loops)
-    fn peel_operators(&self, operates: &Collection<S, (Vec<usize>, OperatesEvent), isize>) -> Collection<S, LogRecord, isize>;
+    fn peel_operators(&self, stream: &Stream<S, (Duration, usize, TimelyEvent)> /*&Collection<S, (Vec<usize>, OperatesEvent), isize>*/) -> Collection<S, LogRecord, isize>;
 }
 
 impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecord, isize> {
-    fn peel_operators(&self, operates: &Collection<S, (Vec<usize>, OperatesEvent), isize>) -> Collection<S, LogRecord, isize> {
+    fn peel_operators(&self, stream: &Stream<S, (Duration, usize, TimelyEvent)> /*&Collection<S, (Vec<usize>, OperatesEvent), isize>*/) -> Collection<S, LogRecord, isize> {
+
+        let operates = stream
+            .flat_map(|(t, _wid, x)| {
+                if let Operates(event) = x {
+                    Some(((event.addr.clone(), event), t, 1))
+                } else {
+                    None
+                }
+            })
+            .inspect_batch(|t, x| println!("a: {:?} - {:?}", t, x))
+            .as_collection();
+
         // all `Operates` addresses with their inner-most level removed
         let operates_anti = operates
             .map(|(mut addr, _)| {
                 addr.pop();
                 addr
             })
-            .distinct();
+            .inspect_batch(|t, x| println!("c: {:?} - {:?}", t, x))
+            .distinct()
+            .inspect_batch(|t, x| println!("d: {:?} - {:?}", t, x));
 
         // all `Operates` operator ids that are at the lowest nesting level
         let peeled = operates
             .antijoin(&operates_anti)
-            .inspect(|x| println!("before distinct"))
+            // .inspect(|x| println!("b: {:?}", x))
             .distinct()
-            .inspect(|x| println!("after distinct"))
+            // .inspect(|x| println!("a: {:?}", x))
             .map(|(_, x)| x.id as u64);
 
         // all `LogRecord`s that have an `operator_id` that's not part of the lowest level
@@ -316,27 +330,9 @@ where
     let stream = replayers.replay_into(scope);
     // reconstruct_dataflow(&stream);
 
-    let mut operates_trace = stream
-        .flat_map(|(t, _wid, x)| {
-            if let Operates(event) = x {
-                Some(((event.addr.clone(), event), t, 1))
-            } else {
-                None
-            }
-        })
-        .as_collection()
-        .arrange_by_key()
-        .trace;
-    operates_trace.advance_by(&[]);
-    operates_trace.distinguish_since(&[]);
-
-    let operates = operates_trace
-        .import(scope)
-        .as_collection(|k, v| (k.clone(), v.clone()));
-
     stream
         .events_to_log_records()
         .as_collection()
-        .peel_operators(&operates)
+        .peel_operators(&stream)
         .log_epoch()
 }
