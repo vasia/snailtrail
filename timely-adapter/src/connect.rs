@@ -10,6 +10,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::io::Read;
 
 use timely::dataflow::operators::capture::EventReader;
 use timely::logging::{TimelyEvent, WorkerIdentifier};
@@ -25,13 +26,16 @@ pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
     ))
 }
 
+/// A replayer that reads data to be streamed into timely
+pub type Replayer<R> where R: Read = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), R>;
+
 /// Construct replayers that read data from sockets and can stream it into
 /// timely dataflow.
 pub fn make_replayers(
     sockets: Arc<Mutex<Vec<Option<TcpStream>>>>,
     index: usize,
     peers: usize,
-) -> Vec<EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), TcpStream>> {
+) -> Vec<Replayer<TcpStream>> {
     sockets
         .lock()
         .unwrap()
@@ -43,16 +47,13 @@ pub fn make_replayers(
         .collect::<Vec<_>>()
 }
 
-/// A replayer that reads data from a file to be streamed into timely
-pub type FileReplayer = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), File>;
-
 /// Construct replayers that read data from a file and can stream it into
 /// timely dataflow.
 pub fn make_file_replayers(
     index: usize,
     source_peers: usize,
     worker_peers: usize,
-) -> Vec<FileReplayer> {
+) -> Vec<Replayer<File>> {
     println!("{}, {}, {}", index, source_peers, worker_peers);
     (0..source_peers)
         .filter(|i| i % worker_peers == index)
