@@ -46,6 +46,9 @@ use timely::dataflow::operators::CapabilityRef;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::logging::OperatesEvent;
+use timely::dataflow::operators::exchange::Exchange;
+use timely::logging::ScheduleEvent;
+use timely::dataflow::InputHandle;
 
 use differential_dataflow::collection::{ Collection, AsCollection };
 use differential_dataflow::operators::consolidate::Consolidate;
@@ -243,35 +246,27 @@ impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecor
                     None
                 }
             })
-            .inspect_batch(|t, x| println!("a: {:?} - {:?}", t, x))
             .as_collection();
 
         // all `Operates` addresses with their inner-most level removed
         let operates_anti = operates
-            .map(|(mut addr, _)| {
+            .map(|(mut addr, event)| {
                 addr.pop();
                 addr
-            })
-            .inspect_batch(|t, x| println!("c: {:?} - {:?}", t, x))
-            .distinct()
-            .inspect_batch(|t, x| println!("d: {:?} - {:?}", t, x));
+            });
 
         // all `Operates` operator ids that are at the lowest nesting level
         let peeled = operates
-            .antijoin(&operates_anti)
-            // .inspect(|x| println!("b: {:?}", x))
-            .distinct()
-            // .inspect(|x| println!("a: {:?}", x))
+            .antijoin(&operates_anti.distinct())
             .map(|(_, x)| x.id as u64);
 
         // all `LogRecord`s that have an `operator_id` that's not part of the lowest level
         let to_remove = self
             .flat_map(|x| if let Some(id) = x.operator_id { Some((id, x.timestamp)) } else { None })
             .antijoin(&peeled)
-            .distinct()
             .map(|(id, ts)| ts);
 
-        // `LogRecord`s without records with `operator_id`s that aren't part of the lowest level
+        // // `LogRecord`s without records with `operator_id`s that aren't part of the lowest level
         self.map(|x| (x.timestamp, x))
             .antijoin(&to_remove)
             .consolidate()
@@ -320,11 +315,12 @@ where
     R: Read + 'static,
 {
     let stream = replayers.replay_into(scope);
-    // reconstruct_dataflow(&stream);
+    reconstruct_dataflow(&stream);
 
     stream
         .events_to_log_records()
         .as_collection()
         .peel_operators(&stream)
+        // .inspect(|x| println!("RESULT: {:?} --- {}", x.2, x.0))
         .log_epoch()
 }
