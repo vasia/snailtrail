@@ -63,43 +63,35 @@ fn reconstruct_dataflow<S: Scope<Timestamp = Duration>>(
 ) {
     let operates = stream
         .filter(|(_, worker, _)| *worker == 0)
-        .flat_map(|(t, _worker, x)| {
-            if let Operates(event) = x {
-                if event.addr.len() > 1 {
-                    Some(((event.addr[1], event), t, 1))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
+        .flat_map(|(t, _worker, x)| if let Operates(event) = x {Some(((event.addr.clone(), event), t, 1))} else {None})
         .as_collection();
+        // .inspect(|x| println!("{:?}", x));
 
-    stream
+    let channels_source = stream
         .filter(|(_, worker, _)| *worker == 0)
-        .flat_map(|(t, _worker, x)| {
-            if let Channels(event) = x {
-                Some(((event.source.0, event), t, 1))
-            } else {
-                None
-            }
+        .flat_map(|(t, _worker, x)| if let Channels(event) = x {
+            // key by source
+            let mut absolute_addr = event.scope_addr.clone();
+            absolute_addr.push(event.source.0);
+            Some(((absolute_addr, event), t, 1))
+        } else {None})
+        .as_collection();
+        // .inspect(|x| println!("{:?}", x));
+
+    channels_source
+        // join source
+        .join(&operates)
+        .map(|(_key, (ch, op_src))| {
+            // key by target
+            let mut absolute_addr = ch.scope_addr.clone();
+            absolute_addr.push(ch.target.0);
+            (absolute_addr, (ch, op_src))
         })
-        .as_collection()
-        .join(&operates) // join sources
-        .map(|(_key, (a, b))| (a.target.0, (a, b)))
-        .join(&operates) // join targets
-        .map(|(_key, ((a, b), c))| (0, (a, (b, c))))
-        .reduce(|_key, input, output| {
-            for ((channel, (from, to)), _t) in input {
-                output.push((
-                    format!("Channel {}: ({}, {}) -> ({}, {})", channel.id, from.id, from.name, to.id, to.name),
-                    1,
-                ))
-            }
-        })
-        .map(|(_key, x)| x)
-        .inspect(|(x, _t, _diff)| println!("Dataflow: {}", x));
+        // join target
+        .join(&operates)
+        .map(|(_key, ((ch, op_src), op_target))|
+             format!("{:?} Ch{}: ({}, {}) -> ({}, {})", ch.scope_addr, ch.id, op_src.id, op_src.name, op_target.id, op_target.name))
+        .inspect(|x| println!("{:?}", x.0));
 }
 
 
