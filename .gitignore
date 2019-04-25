@@ -1,6 +1,7 @@
 ## Project-specific (some directories may have a local .gitignore)
 
 *.bk
+*.dump
 
 # Nothing yet
 
