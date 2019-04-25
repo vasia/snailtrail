@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/li1/snailtrail/raw/master/snail.png" width="250">
+</p>
+
 # SnailTrail
 
 This is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a tool to run online critical path analysis on various stream processors (see also the [SnailTrail NSDI'18 Paper](https://doi.org/10.3929/ethz-b-000228581)).
