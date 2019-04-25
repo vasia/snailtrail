@@ -45,6 +45,14 @@ Implementation of various algorithms that run on top of the PAG to provide insig
 
 See the `docs` subfolder for additional documentation. Of course, also check out the `examples` and code documentation built with `cargo doc`.
 
+## Resources
+
+* [Hoffmann et al.: **SnailTrail Paper** (NSDI '18)](https://doi.org/10.3929/ethz-b-000228581)
+* [Malte Sandstede: **A Short Introduction to SnailTrail** (ETH '19)](https://github.com/li1/talks/raw/master/snailtrail.pdf)
+* [Vasia Kalavri: **Towards self-managed, re-configurable streaming dataflow systems** (UGENT '19)](https://www.youtube.com/watch?v=E947ynd_vGI)
+* [Moritz Hoffmann: **SnailTrail: Generalizing Critical Paths for Online Analysis of Distributed Dataflows** (NSDI '18)](https://www.youtube.com/watch?v=h5kPd59v0U0)
+* [Vasia Kalavri: **Online performance analysis of distributed dataflow systems** (O'Reilly Velocity London '18)](https://www.youtube.com/watch?v=AUQJkjx1Uh8)
+
 ## License
 
 SnailTrail is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0), with portions covered by various BSD-like licenses.
