@@ -252,7 +252,18 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S> for Stream<S, (Durati
                             },
                             // epoch updates
                             Text(event) => {
-                                epoch += 1;
+                                // @TODO: this is pretty brittle, but alternative
+                                // (simply epoch += 1 on every Text event) breaks
+                                // if w.peers() < source_peers
+                                if event.starts_with("[st] begin computation") {
+                                    epoch = 1;
+                                } else if event.starts_with("[st] closed times before:") {
+                                    let (text, closed) = event.split_at(26);
+                                    epoch = closed.parse::<u64>().expect("epoch not a number") + 1;
+                                } else {
+                                    panic!("unknown Text event");
+                                }
+                                println!("{}, new epoch: {}", event, epoch);
                                 None
                             },
                             _ => None
