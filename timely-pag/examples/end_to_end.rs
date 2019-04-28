@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use timely_pag::dataflow::{Config, end_to_end_analysis};
+use timely_pag::dataflow::{end_to_end_analysis, Config};
 
 fn main() {
     let workers = std::env::args().nth(1).unwrap().parse::<String>().unwrap();
