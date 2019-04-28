@@ -38,15 +38,15 @@ pub enum ActivityType {
     Buffer = 2,
     /// Operator scheduled for work
     Scheduling = 3,
-    /// Operator actually doing work (?)
+    /// Operator actually doing work
     Processing = 4,
-    /// ?
+    /// Barrier processing activities
     BarrierProcessing = 5,
     /// Data serialization
     Serialization = 6,
     /// Data deserialization
     Deserialization = 7,
-    /// ?
+    /// Fault tolerance activities
     FaultTolerance = 8,
     /// remote control messages, e.g. about progress
     ControlMessage = 9,
@@ -55,10 +55,13 @@ pub enum ActivityType {
     /// Unknown message, used during PAG construction
     /// (not emitted by profiling)
     Unknown = 11,
-    /// Waiting for unblocking
+    /// Waiting for unblocking.
+    /// In particular, operator might wait for external input.
     /// (not emitted by profiling)
     Waiting = 12,
-    /// ?
+    /// Waiting where next activity is actively prepared,
+    /// e.g. in-between a ScheduleEnd and consecutive ScheduleStart.
+    /// In particular, operator doesn't depend on external input.
     /// (not emitted by profiling)
     BusyWaiting = 13,
 }
