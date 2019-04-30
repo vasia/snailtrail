@@ -1,6 +1,6 @@
 [workspace]
 
-members = ["snailtrail", "logformat/rust", "pag-construction", "timely-pag", "timely-adapter", "tensorflow/tensorflow-parser", "spark-parser"]
+members = ["logformat", "timely-snailtrail", "timely-adapter"]
 
 [profile.release]
 debug = true
