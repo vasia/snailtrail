@@ -10,6 +10,5 @@ clap = "*"
 time = "*"
 timely = "^0.9"
 differential-dataflow = "^0.9"
-logformat = { version = "0.2.0", path = "../logformat/rust" }
-# snailtrail = { version = "0.2.0", path = "../snailtrail" }
+logformat = { version = "0.2.0", path = "../logformat" }
 timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }

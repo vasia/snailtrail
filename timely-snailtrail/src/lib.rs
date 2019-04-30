@@ -1,58 +1,41 @@
-// Copyright 2017 ETH Zurich. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
+//! Performs PAG construction using the provided log trace,
+//! either by connecting to an online dataflow, or by reading from a
+//! serialized log trace.
+//! 1. Reads from trace and constructs a replayed dataflow
+//! 2. Uses `timely-adapter` to generate the intermediate `LogRecord`
+//!     representation from the supplied trace
+//! 3. Creates a PAG from the `LogRecord` representation
+
+#![deny(missing_docs)]
 
 #[macro_use]
 extern crate abomonation_derive;
 
-use logformat::{ActivityType, EventType, LogRecord, OperatorId, Worker};
+// Contains algorithms to be run on the PAG
+pub mod algo;
 
-use std::collections::HashMap;
-use std::hash::Hash;
-use std::time::Duration;
+/// Contains the PAG construction
+pub mod pag;
 
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::Collection;
-
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::aggregation::Aggregate;
-use timely::dataflow::operators::generic::operator::Operator;
-use timely::dataflow::operators::{Concat, Filter, Map, Partition};
-use timely::dataflow::{Scope, Stream};
-use timely::ExchangeData;
-
-pub mod dataflow;
-
-/// A node in the activity graph
-#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy, Ord, PartialOrd)]
-pub struct PagNode {
-    pub timestamp: logformat::Timestamp,
-    pub worker_id: Worker,
+/// Config with which the PAG dataflow is run
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// Arguments that should be passed to the underlying timely computation
+    pub timely_args: Vec<String>,
+    /// # of workers the profiled computation runs on
+    pub source_peers: usize,
 }
 
-impl<'a> From<&'a LogRecord> for PagNode {
-    fn from(record: &'a LogRecord) -> Self {
-        PagNode {
-            timestamp: record.timestamp,
-            worker_id: record.local_worker,
-        }
-    }
-}
-
-/// Elements of a complete activity graph, including ingress/egress points
-#[derive(Abomonation, Clone, Debug, Eq, Hash, PartialEq)]
-pub enum PagOutput {
-    // Entry point into the graph
-    StartNode(PagNode),
-    // Exit point from the graph
-    EndNode(PagNode),
-    // Graph edges
-    Edge(PagEdge),
-}
+// /// Elements of a complete activity graph, including ingress/egress points
+// #[derive(Abomonation, Clone, Debug, Eq, Hash, PartialEq)]
+// pub enum PagOutput {
+//     /// Entry point into the graph
+//     StartNode(PagNode),
+//     /// Exit point from the graph
+//     EndNode(PagNode),
+//     /// Graph edges
+//     Edge(PagEdge),
+// }
 
 // impl SrcDst<PagNode> for PagOutput {
 //     fn src(&self) -> Option<PagNode> {
@@ -71,29 +54,6 @@ pub enum PagOutput {
 //         }
 //     }
 // }
-
-/// Information on how traverse an edge
-#[derive(Abomonation, Hash, Clone, Eq, Ord, PartialEq, PartialOrd, Debug)]
-pub enum TraversalType {
-    Undefined,
-    Block,
-    Unbounded,
-}
-
-/// An edge in the activity graph
-#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
-pub struct PagEdge {
-    /// The source node
-    pub source: PagNode,
-    /// The destination node
-    pub destination: PagNode,
-    /// The activity type
-    pub edge_type: ActivityType,
-    /// An optional operator ID
-    pub operator_id: Option<OperatorId>,
-    /// Edge dependency information
-    pub traverse: TraversalType,
-}
 
 // impl PagEdge {
 //     pub fn weight(&self) -> u64 {
