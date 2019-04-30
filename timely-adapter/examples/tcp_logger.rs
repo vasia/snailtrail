@@ -1,16 +1,16 @@
 use std::time::Duration;
 
-use timely::logging::ScheduleEvent;
-use timely::logging::OperatesEvent;
-use timely::logging::TimelyEvent::Operates;
-use timely::logging::TimelyEvent::Schedule;
-use timely_adapter::record_collection;
-use timely_adapter::connect::{open_sockets, make_replayers};
-use timely_adapter::connect::{make_file_replayers};
 use timely::dataflow::operators::capture::replay::Replay;
 use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::InputHandle;
+use timely::logging::OperatesEvent;
+use timely::logging::ScheduleEvent;
+use timely::logging::TimelyEvent::Operates;
+use timely::logging::TimelyEvent::Schedule;
 use timely::logging::{StartStop, TimelyEvent};
+use timely_adapter::connect::make_file_replayers;
+use timely_adapter::connect::{make_replayers, open_sockets};
+use timely_adapter::record_collection;
 
 fn main() {
     // the number of workers in the computation we're examining

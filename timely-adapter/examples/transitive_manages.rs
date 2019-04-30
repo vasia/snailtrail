@@ -2,52 +2,25 @@
 //!
 //! For barebones logging of TimelyEvents, env var `TIMELY_WORKER_LOG_ADDR=<IP:Port>` can
 //! be passed. This then logs every message handled by any worker.
-//!
-//! Alternatively, [register_file_dumper](register_file_dumper) can be used to create a
-//! dump to be read back in by the [timely adapter](timely_adapter).
 
 use differential_dataflow::input::InputSession;
-use differential_dataflow::operators::Join;
 use differential_dataflow::operators::iterate::Iterate;
 use differential_dataflow::operators::reduce::Threshold;
+use differential_dataflow::operators::Join;
 
 use timely::communication::allocator::Generic;
 use timely::logging::TimelyEvent;
-use timely::worker::Worker;
 use timely::order::PartialOrder;
+use timely::worker::Worker;
 
-/// capture timely log messages to file. Alternatively use `TIMELY_WORKER_LOG_ADDR`.
-fn register_file_dumper(worker: &mut Worker<Generic>) {
-    use timely::dataflow::operators::capture::EventWriter;
-    use timely::logging::BatchLogger;
-
-    use std::error::Error;
-    use std::fs::File;
-    use std::path::Path;
-
-    let name = format!("{:?}.dump", worker.index());
-    let path = Path::new(&name);
-    let file = match File::create(&path) {
-        Err(why) => panic!("couldn't create {}: {}", path.display(), why.description()),
-        Ok(file) => file,
-    };
-
-    let writer = EventWriter::new(file);
-    let mut logger = BatchLogger::new(writer);
-
-    worker
-        .log_register()
-        .insert::<TimelyEvent, _>("timely", move |time, data| {
-            logger.publish_batch(time, data);
-        });
-}
+use timely_adapter::connect::register_file_dumper;
 
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {
         let index = worker.index();
         let mut input = InputSession::new();
 
-        // for now, dump logs to file instead of TCP
+        // (Un)comment to toggle between write to file & write to TCP
         register_file_dumper(worker);
 
         // define a new computation.
@@ -55,9 +28,8 @@ fn main() {
             // create a new collection from our input.
             let manages = input.to_collection(scope);
 
-            manages   // transitive contains (manager, person) for many hops.
+            manages // transitive contains (manager, person) for many hops.
                 .iterate(|transitive| {
-
                     let manages = manages.enter(&transitive.scope());
 
                     transitive
@@ -67,7 +39,7 @@ fn main() {
                         .concat(&manages)
                         .distinct()
                 })
-                .inspect(|x| println!("{:?}", x))
+                // .inspect(|x| println!("{}, {:?}", index, x))
                 .probe()
         });
 
@@ -77,8 +49,9 @@ fn main() {
             .get::<TimelyEvent>("timely")
             .expect("Timely logger absent.");
 
-        let size = 5;
-        let rounds = 1;
+        let size = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
+        let rounds = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
+        let sleep_ms = std::env::args().nth(3).unwrap().parse::<u64>().unwrap();
         input.advance_to(0);
 
         timely_logger.log(TimelyEvent::Text(format!(
@@ -87,17 +60,25 @@ fn main() {
         )));
 
         for round in 0..rounds {
-            for person in 0 .. size {
+            for person in 0..size {
                 if worker.index() == person % worker.peers() {
-                    input.insert((person/2, person));
+                    input.insert((person / 2, person));
+                    input.remove((person / 3, person));
                 }
             }
 
+            let timer = std::time::Instant::now();
             input.advance_to(round + 1);
             input.flush();
             while probe.less_than(input.time()) {
                 worker.step();
             }
+            println!(
+                "{}@{}: epoch done in {}",
+                index,
+                round,
+                timer.elapsed().as_millis()
+            );
 
             // @TODO: this and other timely events aren't consistently
             // flushed when stalling the application beforehand.
@@ -105,9 +86,14 @@ fn main() {
                 "[st] closed times before: {:?}",
                 input.time()
             )));
+
+            if sleep_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+            }
         }
 
         // stall application
         // use std::io::stdin; stdin().read_line(&mut String::new()).unwrap();
-    }).expect("Computation terminated abnormally");
+    })
+    .expect("Computation terminated abnormally");
 }
