@@ -1,13 +1,3 @@
-#![deny(missing_docs)]
-
-// Copyright 2017 ETH Zurich. All rights reserved.
-//
-// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
-// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
-// option. This file may not be copied, modified, or distributed
-// except according to those terms.
-
 //! Data structure for a `LogRecord`.
 //! A `LogRecord` constitutes the unified `struct` representation of
 //! log messages from various stream processors.
@@ -15,6 +5,7 @@
 //! It is the underlying structure from which the PAG construction starts.
 //! If necessary, it can also be serialized e.g. into a `msgpack` representation.
 
+#![deny(missing_docs)]
 
 #[macro_use]
 extern crate enum_primitive_derive;
@@ -182,7 +173,7 @@ impl LogRecord {
         let ts_nanos = self.timestamp.subsec_nanos();
         msgpack::encode::write_uint(writer, u64::from(ts_secs))?;
         msgpack::encode::write_uint(writer, u64::from(ts_nanos))?;
-        msgpack::encode::write_uint(writer, self.epoch);
+        msgpack::encode::write_uint(writer, self.epoch)?;
         msgpack::encode::write_uint(writer, u64::from(self.local_worker as u64))?;
         msgpack::encode::write_uint(writer, self.activity_type.to_u64().unwrap())?;
         msgpack::encode::write_uint(writer, self.event_type.to_u64().unwrap())?;
