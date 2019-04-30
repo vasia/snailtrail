@@ -6,7 +6,7 @@
 
 This is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a tool to run online critical path analysis on various stream processors (see also the [SnailTrail NSDI'18 Paper](https://doi.org/10.3929/ethz-b-000228581)).
 
-The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.9 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow).
+The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.9 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow) and won't refrain from breaking existing upstream abstractions (even though they should be relatively easy to add back in at a later point in time).
 
 ## Structure
 
@@ -14,9 +14,18 @@ The fork builds upon the original repository and implements further algorithms f
 
 (Roughly in order of appearance)
 
+#### In this repository
+
 |Type | Crate    | Description |
 | --------- | -------- | ----------- |
 | adapter | `timely-adapter` | timely / differential 0.9 adapter |
+| infrastructure | `logformat` | Shared definitions of core data types and serialization of traces. |
+| infrastructure, algorithms | `timely-snailtrail` | PAG generation & algorithms for timely 0.9 with epochal semantics. |
+
+#### Upstream
+
+|Type | Crate    | Description |
+| --------- | -------- | ----------- |
 | adapter | `spark-parser` | Spark adapter |
 | adapter | `tensorflow` | TensorFlow adapter |
 | adapter | Flink  | not publicly available |
@@ -24,7 +33,6 @@ The fork builds upon the original repository and implements further algorithms f
 | adapter | Heron  | not publicly available |
 | infrastructure | `logformat` | Shared definitions of core data types and serialization of traces (in Rust, Java). |
 | infrastructure | `pag-construction` | Constructs the Program Activity Graph (PAG) from a flat stream of events which denote the start/end of computation and communication. Also has scripts to generate various plots. |
-| infrastructure | `timely-pag` | PAG generation specifically for timely 0.9 with epochal semantics. |
 | algorithms | `snailtrail` | Calculates a ranking for PAG edges by computing how many times an edge appears in the set of all-pairs shortest paths ("critical participation", cf. the paper). |
 
 ### Adapters
