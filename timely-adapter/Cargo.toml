@@ -8,3 +8,7 @@ edition = "2018"
 timely = "^0.9"
 differential-dataflow = "^0.9"
 logformat = { version = "0.2.0", path = "../logformat" }
+
+[dev-dependencies]
+graph_map = { git = "https://github.com/frankmcsherry/graph-map.git"}
+dogsdogsdogs = { path = "../../differential-dataflow/dogsdogsdogs" }

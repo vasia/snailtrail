@@ -14,6 +14,7 @@ use timely_adapter::connect::Replayer;
 use crate::pag;
 use crate::pag::{PagEdge, PagNode};
 
+
 /// PAG Nodes from which a computation can start
 pub type Whitelist = InputSession<Duration, (u64, PagNode), isize>;
 
@@ -36,11 +37,9 @@ pub fn path_length<R: 'static + Read, A: Allocate>(
         let (blacklist_handle, blacklist) = scope.new_collection();
         let (whitelist_handle, whitelist) = scope.new_collection();
 
-        let pag = pag::create_pag(scope, replayers)
+        let pag_by_source = pag::create_pag(scope, replayers)
             .filter(|(epoch, _x)| epoch == &4) // @TODO: remove
-            .concat(&blacklist);
-
-        let pag_by_source = pag
+            .concat(&blacklist)
             .map(|(epoch, x)| ((epoch, x.source), x.destination))
             .arrange_by_key();
 
