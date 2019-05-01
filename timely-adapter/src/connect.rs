@@ -12,15 +12,27 @@ use std::{
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
+    io::Write,
 };
 
-use timely::communication::allocator::Generic;
-use timely::dataflow::operators::capture::EventReader;
-use timely::logging::{TimelyEvent, WorkerIdentifier};
-use timely::worker::Worker;
+use timely::{
+    communication::allocator::Generic,
+    worker::Worker,
+    logging::{BatchLogger, TimelyEvent, WorkerIdentifier},
+    dataflow::operators::capture::{
+        EventReader,
+        Event,
+        EventWriter,
+        event::EventPusher
+    }
+};
+
+use TimelyEvent::{Operates, Channels, Progress, Messages, Schedule, Text};
+
 
 /// Listens on 127.0.0.1:8000 and opens `source_peers` sockets from the
-/// computations we're examining.
+/// computations we're examining (one socket for every worker on the
+/// examined computation)
 pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     Arc::new(Mutex::new(
@@ -33,6 +45,9 @@ pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
 /// A replayer that reads data to be streamed into timely
 pub type Replayer<R> = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), R>;
 
+// @TODO look into extracting the .next logic, instead dump the whole TCP stream into a buffer
+// and read from that with replay so that computation isn't stalled by large snailtrail batch
+// ingestion
 /// Construct replayers that read data from sockets and can stream it into
 /// timely dataflow.
 pub fn make_replayers(
@@ -74,31 +89,166 @@ pub fn make_file_replayers(
         .collect::<Vec<_>>()
 }
 
-/// capture timely log messages to file. Alternatively use `TIMELY_WORKER_LOG_ADDR`.
-pub fn register_file_dumper(worker: &mut Worker<Generic>) {
-    use timely::dataflow::operators::capture::EventWriter;
-    use timely::logging::BatchLogger;
+/// Logger to use for computation event logging
+pub enum Logger {
+    /// Batches events to TCP or file. Outputs each batch at last event's
+    /// time. No further event preprocessing in any way.
+    All,
+    /// Batches events to TCP or file. Filters events so that they are
+    /// optimized for use in PAG construction.
+    Pag,
+}
 
-    use std::error::Error;
-    use std::fs::File;
-    use std::path::Path;
+// @TODO: pass as CLA
+const MAX_FUEL: isize = 30_000;
 
-    let name = format!("{:?}.dump", worker.index());
-    let path = Path::new(&name);
-    let file = match File::create(&path) {
-        Err(why) => panic!("couldn't create {}: {}", path.display(), why.description()),
-        Ok(file) => file,
-    };
+/// Batched logging of events to TCP or file.
+/// For live analysis, provide `SNAILTRAIL_ADDR` as env variable.
+/// Else, the computation will log to file for later replay.
+pub fn register_logger(worker: &mut Worker<Generic>, logger: Logger) {
+    if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
+        if let Ok(stream) = TcpStream::connect(&addr) {
+            let writer = EventWriter::new(stream);
+            match logger {
+                Logger::All => log_all(worker, writer),
+                Logger::Pag => log_pag(worker, writer),
+            };
+        } else {
+            panic!("Could not connect logging stream to: {:?}", addr);
+        }
+    } else {
+        let name = format!("{:?}.dump", worker.index());
+        let path = Path::new(&name);
+        let file = match File::create(&path) {
+            Err(why) => panic!("couldn't create {}: {}", path.display(), why.description()),
+            Ok(file) => file,
+        };
+        let writer = EventWriter::new(file);
 
-    let writer = EventWriter::new(file);
+        match logger {
+            Logger::All => log_all(worker, writer),
+            Logger::Pag => log_pag(worker, writer),
+        };
+    }
+}
+
+fn log_all<W: 'static + Write> (worker: &mut Worker<Generic>, writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>) {
     let mut logger = BatchLogger::new(writer);
 
-    worker
-        .log_register()
-        .insert::<TimelyEvent, _>("timely", move |time, data| {
-            logger.publish_batch(time, data);
+    let mut fuel = MAX_FUEL;
+    let mut buffer = Vec::new();
+
+    let index = worker.index();
+
+    worker.log_register()
+        .insert::<TimelyEvent,_>("timely", move |time, data| {
+            buffer.append(data);
+            fuel -= 1;
+
+            if fuel <= 0 {
+                fuel = MAX_FUEL;
+                println!("all publishing {}@{:?}", index, &time);
+                logger.publish_batch(&time, &mut buffer);
+                buffer.drain(..);
+            }
         });
 }
+
+// @TODO docstring
+fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>) {
+    use std::collections::HashMap;
+
+    let mut fuel = MAX_FUEL;
+    let mut buffer = HashMap::new();
+    let mut time_order = Vec::new();
+
+    let index = worker.index();
+
+    let mut frontier = Duration::new(0,1);
+    time_order.push(frontier.clone());
+
+    let mut old_frontier = Duration::new(0,0);
+
+    worker.log_register()
+        .insert::<TimelyEvent,_>("timely", move |time, data| {
+            for tuple in data.drain(..) {
+                match &tuple.2 {
+                    Operates(_) | Channels(_) | Progress(_) | Messages(_) | Schedule(_)  => {
+                        let entry = buffer.entry(frontier).or_insert(Vec::new());
+                        entry.push(tuple);
+                    },
+                    Text(_) => {
+                        let entry = buffer.entry(frontier).or_insert(Vec::new());
+                        entry.push(tuple);
+                        frontier = time.clone();
+                        time_order.push(frontier.clone());
+                    },
+                    _ => {}
+                }
+            }
+
+            fuel -= 1;
+
+            // every `fuel` event batches, we push them all to the writer
+            if fuel <= 0 {
+                fuel = MAX_FUEL;
+                println!("pag publishing {}@{:?}", index, &time);
+
+                // the newest frontier is wip, so we won't consider it
+                let newest_frontier = time_order.pop().expect("time_order should never be empty");
+
+                // we iterate through the time_order to make sure we push events in the correct order
+                for time in time_order.drain(..) {
+                    let batch = buffer.remove(&time).expect("time_order and buffer should stay in sync");
+
+                    // println!("publish @{:?}, count: {}", time, batch.len());
+
+                    writer.push(Event::Messages(time, batch));
+                    writer.push(Event::Progress(vec![(time, 1), (old_frontier, -1)]));
+                    old_frontier = time;
+                }
+                time_order.push(newest_frontier.clone());
+            }
+        });
+}
+
+
+// /// send timely msgs via tcp
+// pub fn register_tcp_dumper(worker: &mut Worker<Generic>) {
+
+//     if let Ok(addr) = ::std::env::var("TIMELY_WORKER_ADDR") {
+//         if let Ok(stream) = TcpStream::connect(&addr) {
+//             let mut writer = EventWriter::new(stream);
+
+//             let mut x = 0;
+//             let mut buffer = Vec::new();
+
+//             worker.log_register()
+//                 .insert::<TimelyEvent,_>("timely", move |_time, data| {
+//                     for (ts, wid, event) in data {
+//                         match event {
+//                             Operates(_) => { x += 1; buffer.push((*ts, *wid, event.clone())); },
+//                             Channels(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
+//                             Progress(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
+//                             Messages(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
+//                             Schedule(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
+//                             Text(_) => { x += 1; buffer.push((*ts, *wid, event.clone())); },
+//                             _ => {}
+//                         }
+
+//                         if x > 10_000 {
+//                             println!("(1)writing out");
+//                             writer.push(Event::Messages(Duration::new(0,0), ::std::mem::replace(&mut buffer, Vec::new())));
+//                             x = 0;
+//                         }
+//                     }
+//                 });
+//         }
+//         else {
+//             panic!("Could not connect logging stream to: {:?}", addr);
+//         }
+//     }
+// }
 
 // /// Create a custom logger that logs user-defined events
 // fn create_user_level_logger(worker: &mut Worker<Generic>) -> Logger<String> {
