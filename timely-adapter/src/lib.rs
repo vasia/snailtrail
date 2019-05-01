@@ -46,7 +46,6 @@ where
         .as_collection()
         .peel_operators(&stream)
         // .inspect(|x| println!("RESULT: {:?} --- {}", x.2, x.0))
-        .log_epoch()
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
@@ -63,8 +62,6 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
             // This only works since we're sure that each worker replays a consistent
             // worker log. In other cases, we'd need to implement a smarter stateful operator.
             let mut vector = Vec::new();
-
-            let mut epoch = 0;
 
             move |input, output| {
                 input.for_each(|cap, data| {
@@ -85,7 +82,6 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                 Some((
                                     LogRecord {
                                         timestamp: t,
-                                        epoch,
                                         local_worker: wid as u64,
                                         activity_type: ActivityType::Scheduling,
                                         event_type,
@@ -94,7 +90,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                         operator_id: Some(event.id as u64),
                                         channel_id: None,
                                     },
-                                    t,
+                                    *retained.time(),
                                     1,
                                 ))
                             }
@@ -119,7 +115,6 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                     Some((
                                         LogRecord {
                                             timestamp: t,
-                                            epoch,
                                             local_worker: wid as u64,
                                             activity_type: ActivityType::DataMessage,
                                             event_type,
@@ -128,7 +123,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        t,
+                                        *retained.time(),
                                         1,
                                     ))
                                 }
@@ -156,7 +151,6 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                     Some((
                                         LogRecord {
                                             timestamp: t,
-                                            epoch,
                                             local_worker: wid as u64,
                                             activity_type: ActivityType::ControlMessage,
                                             event_type,
@@ -165,26 +159,10 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        t,
+                                        *retained.time(),
                                         1,
                                     ))
                                 }
-                            }
-                            // epoch updates
-                            Text(event) => {
-                                // @TODO: this is pretty brittle, but alternative
-                                // (simply epoch += 1 on every Text event) breaks
-                                // if w.peers() < source_peers
-                                if event.starts_with("[st] begin computation") {
-                                    epoch = 1;
-                                } else if event.starts_with("[st] closed times before:") {
-                                    let (_text, closed) = event.split_at(26);
-                                    epoch = closed.parse::<u64>().expect("epoch not a number") + 1;
-                                } else {
-                                    panic!("unknown Text event");
-                                }
-                                println!("{}, new epoch: {}", event, epoch);
-                                None
                             }
                             _ => None,
                         };
@@ -220,7 +198,7 @@ impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecor
         let operates = stream
             .flat_map(|(t, _wid, x)| {
                 if let Operates(event) = x {
-                    Some(((event.addr.clone(), event), t, 1))
+                    Some(((event.addr.clone(), event), Duration::new(0,1), 1))
                 } else {
                     None
                 }
@@ -255,36 +233,5 @@ impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecor
             .antijoin(&to_remove)
             .consolidate()
             .map(|(_, x)| x)
-    }
-}
-
-/// log epoch at beginning
-trait LogEpoch<S: Scope<Timestamp = Duration>> {
-    /// log epoch at beginning
-    fn log_epoch(&self) -> Collection<S, LogRecord, isize>;
-}
-
-impl<S: Scope<Timestamp = Duration>> LogEpoch<S> for Collection<S, LogRecord, isize> {
-    fn log_epoch(&self) -> Collection<S, LogRecord, isize> {
-        self.inner
-            .unary(Pipeline, "epoch logger", |_default, _info| {
-                let mut vector = Vec::new();
-                let mut epoch = 0;
-                move |input, output| {
-                    input.for_each(|cap, data| {
-                        data.swap(&mut vector);
-                        let retained = cap.retain();
-                        let mut session = output.session(&retained);
-                        for (x, t, diff) in vector.drain(..) {
-                            if x.epoch > epoch {
-                                epoch = x.epoch;
-                                println!("epoch: {}", epoch);
-                            }
-                            session.give((x, t, diff));
-                        }
-                    })
-                }
-            })
-            .as_collection()
     }
 }

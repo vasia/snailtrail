@@ -141,8 +141,6 @@ pub type ChannelId = u64;
 pub struct LogRecord {
     /// Event time in nanoseconds since the Epoch (midnight, January 1, 1970 UTC).
     pub timestamp: Timestamp,
-    /// Epoch this LogRecord belongs to
-    pub epoch: u64,
     /// Context this event occured in; denotes which of the parallel timelines it belongs to.
     pub local_worker: Worker,
     /// Describes the instrumentation point which triggered this event.
@@ -162,7 +160,7 @@ pub struct LogRecord {
 
 impl std::fmt::Display for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "LR @ {}|{:?} w{}\t{:?} {:?}\tcorr: {:?}\tremote: {:?}\top: {:?}\tch: {:?}", self.epoch, self.timestamp, self.local_worker, self.event_type, self.activity_type, self.correlator_id, self.remote_worker, self.operator_id, self.channel_id)
+        write!(f, "LR @ {:?} w{}\t{:?} {:?}\tcorr: {:?}\tremote: {:?}\top: {:?}\tch: {:?}", self.timestamp, self.local_worker, self.event_type, self.activity_type, self.correlator_id, self.remote_worker, self.operator_id, self.channel_id)
     }
 }
 
@@ -173,7 +171,6 @@ impl LogRecord {
         let ts_nanos = self.timestamp.subsec_nanos();
         msgpack::encode::write_uint(writer, u64::from(ts_secs))?;
         msgpack::encode::write_uint(writer, u64::from(ts_nanos))?;
-        msgpack::encode::write_uint(writer, self.epoch)?;
         msgpack::encode::write_uint(writer, u64::from(self.local_worker as u64))?;
         msgpack::encode::write_uint(writer, self.activity_type.to_u64().unwrap())?;
         msgpack::encode::write_uint(writer, self.event_type.to_u64().unwrap())?;
@@ -213,7 +210,6 @@ impl LogRecord {
             result
                 .map_err(|read_err| format!("cannot decode timestamp nanos: {:?}", read_err))?
         };
-        let epoch = msgpack::decode::read_int(reader).map_err(|read_err| format!("can't read epoch {:?}", read_err))?;
         let local_worker =
             msgpack::decode::read_int(reader)
                 .map_err(|read_err| format!("cannot decode local_worker: {:?}", read_err))?;
@@ -250,7 +246,6 @@ impl LogRecord {
 
         Ok(LogRecord {
             timestamp: std::time::Duration::new(ts_secs, ts_nanos),
-            epoch,
             local_worker,
             activity_type,
             event_type,

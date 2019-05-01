@@ -64,7 +64,7 @@ pub struct PagEdge {
 pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
     scope: &mut S,
     replayers: Vec<Replayer<R>>,
-) -> Collection<S, (u64, PagEdge), isize> {
+) -> Collection<S, PagEdge, isize> {
     let records: Collection<_, LogRecord, isize> = make_log_records(scope, replayers);
 
     // @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
@@ -86,9 +86,9 @@ pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
 
 fn make_local_edges<S: Scope<Timestamp = Duration>>(
     records: &Collection<S, LogRecord, isize>,
-) -> Collection<S, (u64, PagEdge), isize> {
+) -> Collection<S, PagEdge, isize> {
     records
-        .map(|x| ((x.epoch, x.local_worker), x))
+        .map(|x| (x.local_worker, x))
         .reduce(|_key, input, output| {
             let mut prev_record: Option<&LogRecord> = None;
             let mut prev_node: Option<PagNode> = None;
@@ -148,7 +148,7 @@ fn make_local_edges<S: Scope<Timestamp = Duration>>(
                 }
             }
         })
-        .map(|(key, x)| (key.0, x))
+        .map(|(key, x)| x)
 }
 
 fn make_control_edges<S: Scope<Timestamp = Duration>>(
@@ -158,7 +158,7 @@ fn make_control_edges<S: Scope<Timestamp = Duration>>(
         .filter(|x| {
             x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
         })
-        .map(|x| ((x.epoch, x.local_worker, x.correlator_id, x.channel_id), x));
+        .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
     let control_messages_received = records
         .filter(|x| {
@@ -167,7 +167,6 @@ fn make_control_edges<S: Scope<Timestamp = Duration>>(
         .map(|x| {
             (
                 (
-                    x.epoch,
                     x.remote_worker.unwrap(),
                     x.correlator_id,
                     x.channel_id,

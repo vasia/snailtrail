@@ -16,10 +16,10 @@ use crate::pag::{PagEdge, PagNode};
 
 
 /// PAG Nodes from which a computation can start
-pub type Whitelist = InputSession<Duration, (u64, PagNode), isize>;
+pub type Whitelist = InputSession<Duration, PagNode, isize>;
 
 /// PAG Edges which might be removed during a computation
-pub type Blacklist = InputSession<Duration, (u64, PagEdge), isize>;
+pub type Blacklist = InputSession<Duration, PagEdge, isize>;
 
 /// Counts path length in the PAG generated from `replayers`, starting from nodes in the `whitelist`.
 /// To simulate differential behavior on a changing PAG (this hopefully
@@ -38,19 +38,18 @@ pub fn path_length<R: 'static + Read, A: Allocate>(
         let (whitelist_handle, whitelist) = scope.new_collection();
 
         let pag_by_source = pag::create_pag(scope, replayers)
-            .filter(|(epoch, _x)| epoch == &4) // @TODO: remove
             .concat(&blacklist)
-            .map(|(epoch, x)| ((epoch, x.source), x.destination))
+            .map(|x| (x.source, x.destination))
             .arrange_by_key();
 
         let probe = whitelist
-            .map(|(epoch, x)| ((epoch, x), 1))
+            .map(|x| (x, 1))
             .iterate(|dists| {
                 let pag_by_source = pag_by_source.enter(&dists.scope());
 
                 dists
-                    .join_core(&pag_by_source, |(epoch, _start), dist, dest| {
-                        Some(((*epoch, *dest), dist + 1))
+                    .join_core(&pag_by_source, |_start, dist, dest| {
+                        Some((*dest, dist + 1))
                     })
                     .concat(dists)
                     .distinct()

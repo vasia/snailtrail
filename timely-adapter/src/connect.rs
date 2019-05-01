@@ -171,6 +171,11 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
 
     worker.log_register()
         .insert::<TimelyEvent,_>("timely", move |time, data| {
+
+            if data.len() > 0 {
+                fuel -= 1;
+            }
+
             for tuple in data.drain(..) {
                 match &tuple.2 {
                     Operates(_) | Channels(_) | Progress(_) | Messages(_) | Schedule(_)  => {
@@ -187,12 +192,10 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
                 }
             }
 
-            fuel -= 1;
-
             // every `fuel` event batches, we push them all to the writer
             if fuel <= 0 {
                 fuel = MAX_FUEL;
-                println!("pag publishing {}@{:?}", index, &time);
+                // println!("pag publishing {}@{:?}", index, &time);
 
                 // the newest frontier is wip, so we won't consider it
                 let newest_frontier = time_order.pop().expect("time_order should never be empty");
