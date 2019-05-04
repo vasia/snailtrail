@@ -20,13 +20,13 @@ use timely::{
     },
     logging::{
         StartStop, TimelyEvent,
-        TimelyEvent::{Messages, Operates, Progress, Schedule, Text},
+        TimelyEvent::{Messages, Operates, Progress, Schedule},
     },
 };
 
 use differential_dataflow::{
     collection::{AsCollection, Collection},
-    operators::{consolidate::Consolidate, join::Join, reduce::Threshold},
+    operators::{join::Join, reduce::Threshold},
 };
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.

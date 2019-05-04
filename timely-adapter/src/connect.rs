@@ -18,11 +18,12 @@ use std::{
 use timely::{
     communication::allocator::Generic,
     worker::Worker,
-    logging::{BatchLogger, TimelyEvent, WorkerIdentifier},
+    logging::{TimelyEvent, WorkerIdentifier},
     dataflow::operators::capture::{
         EventReader,
         Event,
         EventWriter,
+        event::EventPusher
     }
 };
 
