@@ -43,12 +43,10 @@ where
     R: Read + 'static,
 {
     let stream = replayers.replay_into(scope);
-
     stream
         .events_to_log_records()
         .as_collection()
         .peel_operators(&stream)
-        // .inspect(|x| println!("RESULT: {:?} --- {}", x.2, x.0))
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
@@ -189,52 +187,37 @@ trait PeelOperators<S: Scope<Timestamp = Duration>> {
     /// the surrounding iterate operators for loops)
     fn peel_operators(
         &self,
-        stream: &Stream<S, (Duration, usize, TimelyEvent)>, /*&Collection<S, (Vec<usize>, OperatesEvent), isize>*/
+        stream: &Stream<S, (Duration, usize, TimelyEvent)>,
     ) -> Collection<S, LogRecord, isize>;
 }
 
 impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecord, isize> {
     fn peel_operators(
         &self,
-        stream: &Stream<S, (Duration, usize, TimelyEvent)>, /*&Collection<S, (Vec<usize>, OperatesEvent), isize>*/
+        stream: &Stream<S, (Duration, usize, TimelyEvent)>,
     ) -> Collection<S, LogRecord, isize> {
+        // only operates events, keyed by addr
         let operates = stream
-            .flat_map(|(t, _wid, x)| {
+            .flat_map(|(t, _, x)| if t.as_nanos() == 1 {
                 if let Operates(event) = x {
-                    Some(((event.addr.clone(), event), Duration::new(0,1), 1))
-                } else {
-                    None
-                }
-            })
+                    Some(((event.addr, Some(event.id as u64)), Duration::from_nanos(1), 1))
+                } else { unreachable!() }
+            } else { None })
             .as_collection();
 
-        // all `Operates` addresses with their inner-most level removed
-        let operates_anti = operates.map(|(mut addr, _event)| {
-            addr.pop();
-            addr
-        });
+        let peel_addrs = operates
+            .map(|(mut addr, _)| {
+                addr.pop();
+                addr
+            });
 
-        // all `Operates` operator ids that are at the lowest nesting level
-        let peeled = operates
-            .antijoin(&operates_anti.distinct())
-            .map(|(_, x)| x.id as u64);
+        let peel_ids = operates
+            .semijoin(&peel_addrs)
+            .map(|(_, id)| id)
+            .distinct();
 
-        // all `LogRecord`s that have an `operator_id` that's not part of the lowest level
-        let to_remove = self
-            .flat_map(|x| {
-                if let Some(id) = x.operator_id {
-                    Some((id, x.timestamp))
-                } else {
-                    None
-                }
-            })
-            .antijoin(&peeled)
-            .map(|(_id, ts)| ts);
-
-        // // `LogRecord`s without records with `operator_id`s that aren't part of the lowest level
-        self.map(|x| (x.timestamp, x))
-            .antijoin(&to_remove)
-            .consolidate()
+        self.map(|x| (x.operator_id, x))
+            .antijoin(&peel_ids)
             .map(|(_, x)| x)
     }
 }
