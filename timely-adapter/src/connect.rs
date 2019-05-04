@@ -30,9 +30,6 @@ use timely::{
 use TimelyEvent::{Operates, Channels, Progress, Messages, Schedule, Text};
 
 
-// @TODO: pass as CLA
-const MAX_FUEL: isize = 1;
-
 /// Listens on 127.0.0.1:8000 and opens `source_peers` sockets from the
 /// computations we're examining (one socket for every worker on the
 /// examined computation)
@@ -111,68 +108,34 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
             Ok(file) => file,
         };
         let writer = EventWriter::new(file);
-
-        match logger {
-            Logger::All => log_all(worker, writer),
-            Logger::Pag => log_pag(worker, writer),
-        };
+        log_pag(worker, writer);
     }
-}
-
-fn log_all<W: 'static + Write> (worker: &mut Worker<Generic>, writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>) {
-    let mut logger = BatchLogger::new(writer);
-
-    let mut fuel = MAX_FUEL;
-    let mut buffer = Vec::new();
-
-    let index = worker.index();
-
-    worker.log_register()
-        .insert::<TimelyEvent,_>("timely", move |time, data| {
-            buffer.append(data);
-            fuel -= 1;
-
-            if fuel <= 0 {
-                fuel = MAX_FUEL;
-                println!("all publishing {}@{:?}", index, &time);
-                logger.publish_batch(&time, &mut buffer);
-                buffer.drain(..);
-            }
-        });
 }
 
 /// Registers a `TimelyEvent` logger which outputs relevant log events for PAG construction.
 /// 1. Only relevant events are written to `writer`.
 /// 2. Using `Text` events as markers, logged events are written out at one time per epoch.
-/// 3. For higher performance, multiple event batches are written out together as a batch.
-/// 4. Dataflow setup is collapsed into t=1ns so that peel_operators is more efficient.
-/// 5. If the computation is bounded, capabilities will be dropped correctly at the end of
+/// 3. Dataflow setup is collapsed into t=1ns so that peel_operators is more efficient.
+/// 4. If the computation is bounded, capabilities will be dropped correctly at the end of
 ///    computation.
-fn log_pag2<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>) {
-    use std::collections::HashMap;
-
-    // every `fuel` events, they are written out to `writer`
-    let mut fuel = MAX_FUEL;
-
-    // buffer of epochs and events for that epoch
-    let mut buffer = HashMap::new();
-
-    // epoch times in the order they advance (used to write out
-    // `buffer` in correct order
-    let mut time_order = Vec::new();
-
+fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>) {
     // first real frontier, used for setting up the computation
     // (`Operates` et al.)
-    let mut frontier = Duration::from_nanos(1);
-    time_order.push(frontier);
+    let mut new_frontier = Duration::from_nanos(1);
 
     // initialized to 0, which we'll drop as soon as the
     // computation makes progress
-    let mut old_frontier = Duration::default();
+    let mut curr_frontier = Duration::default();
 
-    // keeps track of whether the computation is shutting down to
-    // free up last frontier and write out remaining log messages.
-    let mut done = false;
+    // buffer of relevant events for a batch. As a batch only ever belongs
+    // to a single epoch (epoch markers only appear at the beginning of a batch),
+    // we don't have to keep track of times for batch elements.
+    let mut buffer = Vec::new();
+
+    // 1st: marker that computation has ended
+    // 2nd: capabilities have been dropped; no further messages
+    //      should get sent.
+    let mut wrap_up = (false, false);
 
     // debug logs
     let index = worker.index();
@@ -182,74 +145,55 @@ fn log_pag2<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: Event
         .insert::<TimelyEvent,_>("timely", move |time, data| {
             for tuple in data.drain(..) {
                 match &tuple.2 {
-                    Channels(_) | Progress(_) | Messages(_) | Schedule(_)  => {
-                        fuel -= 1;
-                        let entry = buffer.entry(frontier).or_insert(Vec::new());
-                        entry.push(tuple);
-                    },
+                    Channels(_) | Progress(_) | Messages(_) | Schedule(_)  => { buffer.push(tuple); },
                     Operates(_) => {
-                        fuel -= 1;
-                        let entry = buffer.entry(frontier).or_insert(Vec::new());
-
-                        // all operates events should happen in the initialization epoch
-                        assert!(frontier == Duration::from_nanos(1));
-                        entry.push((frontier, tuple.1, tuple.2));
+                        // all operates events should happen in the initialization epoch,
+                        // i.e., before any Text event epoch markers have been observed
+                        assert!(new_frontier.as_nanos() == 1);
+                        buffer.push((new_frontier, tuple.1, tuple.2));
                     },
-                    // Text events mark epochs in the computation
                     Text(e) => {
-                        if e.starts_with("[st] computation done") {done = true;}
+                        // Text events mark epochs in the computation. They are always the first
+                        // in their batch, so a single batch is never split into multiple epochs.
 
-                        fuel -= 1;
-
-                        // advance frontier at which events are buffered to current time
-                        frontier = *time;
-                        time_order.push(frontier);
+                        if e.starts_with("[st] computation done") {
+                            wrap_up = (true, false);
+                        } else {
+                            // advance frontier at which events are buffered to current time
+                            new_frontier = *time;
+                        }
                     },
                     _ => {}
                 }
             }
 
-            if fuel <= 0 || done {
-                fuel = MAX_FUEL;
-                // the newest frontier is still WIP, so don't consider it
-                let newest_frontier = time_order.pop();
-
-                // we iterate through the time_order to make sure we push events in the correct order
-                for mut time in time_order.drain(..) {
-                    if let Some(batch) = buffer.remove(&time) {
-                        // debug logging
-                        total += batch.len();
-                        info!("sent epoch {:?}@w{}, count: {}, total: {}", time, index, batch.len(), total);
-
-                        writer.push(Event::Messages(time, batch));
-
-                        time += Duration::from_nanos(1); // frontier should move past the current batch
-                        writer.push(Event::Progress(vec![(time, 1), (old_frontier, -1)]));
-
-                        old_frontier = time;
-                    } else {
-                        assert!(done == true, "time order & buffer should only desync on logging wrap-up");
-                    }
+            if buffer.len() > 0 && !wrap_up.1 {
+                // potentially downgrade capability to the new frontier
+                if new_frontier > curr_frontier {
+                    info!("w{}@ep{:?}: new epoch: {:?}", index, curr_frontier, new_frontier);
+                    writer.push(Event::Progress(vec![(new_frontier, 1), (curr_frontier, -1)]));
+                    curr_frontier = new_frontier;
                 }
 
-                // add the newest frontier back in
-                if let Some(frontier) = newest_frontier {
-                    time_order.push(frontier);
-                } else {
-                    assert!(done == true, "time order should only dry up on logging wrap-up");
-                }
+                trace!("w{} send @epoch{:?}: count: {} | total: {}", index, curr_frontier, buffer.len(), total);
 
-                if done {
-                    // prevents this from being called over and over
-                    done = false;
+                total += buffer.len();
+                writer.push(Event::Messages(curr_frontier, buffer.clone()));
+                buffer.drain(..);
+            }
 
-                    info!("timely logging wrapping up");
-                    writer.push(Event::Progress(vec![(old_frontier, -1)]));
-                }
+            if wrap_up.0 && !wrap_up.1 {
+                info!("w{}@ep{:?}: timely logging wrapping up | total: {}", index, curr_frontier, total);
+
+                // free capabilities
+                writer.push(Event::Progress(vec![(curr_frontier, -1)]));
+
+                // 1st to false so that marker isn't processed multiple times.
+                // 2nd to true so that no further `Event::Messages` will be sent.
+                wrap_up = (false, true);
             }
         });
 }
-
 
 // /// send timely msgs via tcp
 // pub fn register_tcp_dumper(worker: &mut Worker<Generic>) {
