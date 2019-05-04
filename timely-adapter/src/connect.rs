@@ -23,7 +23,6 @@ use timely::{
         EventReader,
         Event,
         EventWriter,
-        event::EventPusher
     }
 };
 
@@ -45,9 +44,7 @@ pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
 /// A replayer that reads data to be streamed into timely
 pub type Replayer<R> = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), R>;
 
-// @TODO look into extracting the .next logic, instead dump the whole TCP stream into a buffer
-// and read from that with replay so that computation isn't stalled by large snailtrail batch
-// ingestion
+// @TODO TCP stream optimization might be necessary (e.g. smarter consumption of batches)
 /// Construct replayers that read data from sockets and can stream it into
 /// timely dataflow.
 pub fn make_replayers(
@@ -66,6 +63,8 @@ pub fn make_replayers(
         .collect::<Vec<_>>()
 }
 
+// @TODO Currently, the computation runs best with worker_peers == source_peers.
+// It might be worth investigating how replaying could benefit from worker_peers > source_peers.
 /// Construct replayers that read data from a file and can stream it into
 /// timely dataflow.
 pub fn make_file_replayers(
@@ -73,7 +72,7 @@ pub fn make_file_replayers(
     source_peers: usize,
     worker_peers: usize,
 ) -> Vec<Replayer<File>> {
-    println!("{}, {}, {}", index, source_peers, worker_peers);
+    info!("worker index: {}, source peers: {}, worker peers: {}", index, source_peers, worker_peers);
     (0..source_peers)
         .filter(|i| i % worker_peers == index)
         .map(|i| {
@@ -95,6 +94,12 @@ pub fn make_file_replayers(
 pub fn register_logger(worker: &mut Worker<Generic>) {
     if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
         if let Ok(stream) = TcpStream::connect(&addr) {
+
+            // SnailTrail should be able to keep up with an online computation.
+            // If batch sizes are too large, they should be buffered. Blocking the
+            // TCP connection is not an option as it slows down the main computation.
+            stream.set_nonblocking(true).expect("set_nonblocking call failed");
+
             let writer = EventWriter::new(stream);
             log_pag(worker, writer);
         } else {
@@ -194,89 +199,3 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
             }
         });
 }
-
-// /// send timely msgs via tcp
-// pub fn register_tcp_dumper(worker: &mut Worker<Generic>) {
-
-//     if let Ok(addr) = ::std::env::var("TIMELY_WORKER_ADDR") {
-//         if let Ok(stream) = TcpStream::connect(&addr) {
-//             let mut writer = EventWriter::new(stream);
-
-//             let mut x = 0;
-//             let mut buffer = Vec::new();
-
-//             worker.log_register()
-//                 .insert::<TimelyEvent,_>("timely", move |_time, data| {
-//                     for (ts, wid, event) in data {
-//                         match event {
-//                             Operates(_) => { x += 1; buffer.push((*ts, *wid, event.clone())); },
-//                             Channels(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
-//                             Progress(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
-//                             Messages(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
-//                             Schedule(_) => {  x += 1; buffer.push((*ts, *wid, event.clone())); },
-//                             Text(_) => { x += 1; buffer.push((*ts, *wid, event.clone())); },
-//                             _ => {}
-//                         }
-
-//                         if x > 10_000 {
-//                             println!("(1)writing out");
-//                             writer.push(Event::Messages(Duration::new(0,0), ::std::mem::replace(&mut buffer, Vec::new())));
-//                             x = 0;
-//                         }
-//                     }
-//                 });
-//         }
-//         else {
-//             panic!("Could not connect logging stream to: {:?}", addr);
-//         }
-//     }
-// }
-
-// /// Create a custom logger that logs user-defined events
-// fn create_user_level_logger(worker: &mut Worker<Generic>) -> Logger<String> {
-//     worker
-//         .log_register()
-//         // _time: lower bound timestamp of the next event that could be seen
-//         // data: (Duration, Id, T) - timestamp of event, worker id, custom message
-//         .insert::<String, _>("custom_log", |_time, data| {
-//             println!("time: {:?}", _time);
-//             println!("log: {:?}", data);
-//         });
-
-//     worker
-//         .log_register()
-//         .get::<String>("custom_log")
-//         .expect("custom_log logger absent")
-// }
-
-// use differential_dataflow::logging::DifferentialEvent;
-// use std::net::TcpStream;
-// use timely::communication::allocator::Generic;
-// use timely::dataflow::operators::capture::EventWriter;
-// use timely::logging::{BatchLogger, TimelyEvent};
-// use timely::worker::Worker;
-
-// /// Custom logger that combines `timely`, `differential/arrange` and user-defined events
-// pub fn register_logging(worker: &mut Worker<Generic>) {
-//     if let Ok(addr) = ::std::env::var("LOGGING_CONN") {
-//         if let Ok(stream) = TcpStream::connect(&addr) {
-//             let timely_writer = EventWriter::new(stream);
-//             let mut timely_logger = BatchLogger::new(timely_writer);
-//             worker
-//                 .log_register()
-//                 .insert::<Uber, _>("timely", move |time, data| {
-//                     timely_logger.publish_batch(time, data)
-//                 });
-
-//             worker
-//                 .log_register()
-//                 .insert::<Uber, _>("differential/arrange", move |time, data| {
-//                     timely_logger.publish_batch(time, data)
-//                 });
-//         } else {
-//             panic!("Could not connect logging stream to: {:?}", addr);
-//         }
-//     } else {
-//         panic!("Provide LOGGING_CONN env var");
-//     }
-// }
