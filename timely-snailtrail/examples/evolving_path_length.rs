@@ -54,41 +54,30 @@ fn modify_inputs<A: Allocate>(
     let timer = std::time::Instant::now();
 
     if worker.index() == 0 {
-        whitelist.insert((
-            4,
-            PagNode {
-                timestamp: Duration::from_nanos(1_592_530_625),
-                worker_id: 0,
-            },
-        ));
+        whitelist.insert(PagNode { timestamp: Duration::from_nanos(24_126_092_030), worker_id: 0 });
 
-        blacklist.update_at(
-            (
-                4,
-                PagEdge {
-                    source: PagNode {
-                        timestamp: Duration::from_nanos(1592530625),
-                        worker_id: 0,
-                    },
-                    destination: PagNode {
-                        timestamp: Duration::from_nanos(1592704379),
-                        worker_id: 0,
-                    },
-                    edge_type: ActivityType::BusyWaiting,
-                    operator_id: None,
-                    traverse: TraversalType::Unbounded,
-                },
-            ),
-            Duration::new(10, 0),
-            -1,
-        );
+        blacklist.update_at(PagEdge {
+            source: PagNode { timestamp: Duration::from_nanos(28_347_146_247), worker_id: 0 },
+            destination: PagNode { timestamp: Duration::from_nanos(28_347_362_984), worker_id: 0 },
+            edge_type: ActivityType::Scheduling,
+            operator_id: Some(95),
+            traverse: TraversalType::Unbounded },
+        Duration::new(17, 0), -1);
+
+        blacklist.update_at(PagEdge {
+            source: PagNode { timestamp: Duration::from_nanos(28_158_438_933), worker_id: 0 },
+            destination: PagNode { timestamp: Duration::from_nanos(28_158_460_631), worker_id: 0 },
+            edge_type: ActivityType::BusyWaiting, operator_id: None, traverse: TraversalType::Unbounded },
+        Duration::new(23, 0), -1);
     }
 
     drop(whitelist);
     drop(blacklist);
 
     while !probe.done() {
+        probe.with_frontier(|f| println!("frontier: {:?}", f.to_vec()));
         worker.step();
     }
-    println!("done: {}s", timer.elapsed().as_secs());
+
+    println!("done.");
 }
