@@ -4,7 +4,12 @@ use std::{io::Read, time::Duration};
 
 use differential_dataflow::{
     input::{Input, InputSession},
-    operators::{arrange::ArrangeByKey, iterate::Iterate, join::JoinCore, reduce::{Count, Threshold}},
+    operators::{
+        arrange::ArrangeByKey,
+        iterate::Iterate,
+        join::JoinCore,
+        reduce::{Count, Threshold},
+    },
 };
 
 use timely::{communication::Allocate, dataflow::ProbeHandle, worker::Worker};
@@ -13,7 +18,6 @@ use timely_adapter::connect::Replayer;
 
 use crate::pag;
 use crate::pag::{PagEdge, PagNode};
-
 
 /// PAG Nodes from which a computation can start
 pub type Whitelist = InputSession<Duration, PagNode, isize>;
@@ -29,11 +33,7 @@ pub type Blacklist = InputSession<Duration, PagEdge, isize>;
 pub fn path_length<R: 'static + Read, A: Allocate>(
     worker: &mut Worker<A>,
     replayers: Vec<Replayer<R>>,
-) -> (
-    ProbeHandle<Duration>,
-    Whitelist,
-    Blacklist,
-) {
+) -> (ProbeHandle<Duration>, Whitelist, Blacklist) {
     worker.dataflow(|scope| {
         let (blacklist_handle, blacklist) = scope.new_collection();
         let (whitelist_handle, whitelist) = scope.new_collection();
@@ -49,9 +49,7 @@ pub fn path_length<R: 'static + Read, A: Allocate>(
                 let pag_by_source = pag_by_source.enter(&dists.scope());
 
                 dists
-                    .join_core(&pag_by_source, |_start, dist, dest| {
-                        Some((*dest, dist + 1))
-                    })
+                    .join_core(&pag_by_source, |_start, dist, dest| Some((*dest, dist + 1)))
                     .concat(dists)
                     .distinct()
             })

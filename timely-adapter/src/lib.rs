@@ -198,23 +198,29 @@ impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecor
     ) -> Collection<S, LogRecord, isize> {
         // only operates events, keyed by addr
         let operates = stream
-            .flat_map(|(t, _, x)| if t.as_nanos() == 1 {
-                if let Operates(event) = x {
-                    Some(((event.addr, Some(event.id as u64)), Duration::from_nanos(1), 1))
-                } else { unreachable!() }
-            } else { None })
+            .flat_map(|(t, _, x)| {
+                if t.as_nanos() == 1 {
+                    if let Operates(event) = x {
+                        Some((
+                            (event.addr, Some(event.id as u64)),
+                            Duration::from_nanos(1),
+                            1,
+                        ))
+                    } else {
+                        unreachable!()
+                    }
+                } else {
+                    None
+                }
+            })
             .as_collection();
 
-        let peel_addrs = operates
-            .map(|(mut addr, _)| {
-                addr.pop();
-                addr
-            });
+        let peel_addrs = operates.map(|(mut addr, _)| {
+            addr.pop();
+            addr
+        });
 
-        let peel_ids = operates
-            .semijoin(&peel_addrs)
-            .map(|(_, id)| id)
-            .distinct();
+        let peel_ids = operates.semijoin(&peel_addrs).map(|(_, id)| id).distinct();
 
         self.map(|x| (x.operator_id, x))
             .antijoin(&peel_ids)

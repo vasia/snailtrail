@@ -2,34 +2,32 @@ use std::io::Read;
 use std::time::Duration;
 
 use timely_adapter::{
-    connect::{Replayer, make_replayers, open_sockets, make_file_replayers},
-    make_log_records
+    connect::{make_file_replayers, make_replayers, open_sockets, Replayer},
+    make_log_records,
 };
-use timely_snailtrail::{
-    pag,
-    Config,
-};
+use timely_snailtrail::{pag, Config};
 
 use timely::{
-    worker::Worker,
     communication::Allocate,
     dataflow::{
+        operators::{capture::replay::Replay, probe::Probe},
         ProbeHandle,
-        operators::{
-            capture::replay::Replay,
-            probe::Probe,
-        }
-    }
+    },
+    worker::Worker,
 };
 
 fn main() {
     let workers = std::env::args().nth(1).unwrap().parse::<String>().unwrap();
     let source_peers = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
-    let from_file = if let Some(_) = std::env::args().nth(3) {true} else {false};
+    let from_file = if let Some(_) = std::env::args().nth(3) {
+        true
+    } else {
+        false
+    };
     let config = Config {
         timely_args: vec!["-w".to_string(), workers],
         source_peers,
-        from_file
+        from_file,
     };
 
     inspector(config);
@@ -56,7 +54,8 @@ fn inspector(config: Config) {
             let tcp_replayers = make_replayers(sockets, worker.index(), worker.peers());
             dataflow(worker, tcp_replayers)
         } else {
-            let file_replayers = make_file_replayers(worker.index(), config.source_peers, worker.peers());
+            let file_replayers =
+                make_file_replayers(worker.index(), config.source_peers, worker.peers());
             dataflow(worker, file_replayers)
         };
 
@@ -73,7 +72,8 @@ fn inspector(config: Config) {
         }
 
         println!("w{} done: {}ms", index, timer.elapsed().as_millis());
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 pub fn dataflow<R: 'static + Read, A: Allocate>(
@@ -87,8 +87,8 @@ pub fn dataflow<R: 'static + Read, A: Allocate>(
         // pag::create_pag(scope, replayers)
         // replayers.replay_into(scope)
         make_log_records(scope, replayers)
-        // .inspect(|x| println!("{:?}", x))
-        // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
+            // .inspect(|x| println!("{:?}", x))
+            // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
             .probe()
     })
 }

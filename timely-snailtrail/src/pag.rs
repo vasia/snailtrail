@@ -79,8 +79,7 @@ pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
     // @TODO: DataMessages
     // let data_edges = make_data_edges(&records);
 
-    local_edges
-        .concat(&control_edges)
+    local_edges.concat(&control_edges)
     // .concat(&data_edges)
 }
 
@@ -113,8 +112,7 @@ fn make_local_edges<S: Scope<Timestamp = Duration>>(
                     };
 
                     let make_op_id = |prev: &LogRecord, curr: &LogRecord| {
-                        if prev.event_type == EventType::Start
-                            && curr.event_type == EventType::End
+                        if prev.event_type == EventType::Start && curr.event_type == EventType::End
                         {
                             curr.operator_id
                         } else {
@@ -157,17 +155,18 @@ fn make_control_edges<S: Scope<Timestamp = Duration>>(
         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
     let control_messages_received = records
-        .filter(|x| {x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received})
-        .map(|x| {((x.remote_worker.unwrap(), x.correlator_id, x.channel_id,), x,)});
+        .filter(|x| {
+            x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received
+        })
+        .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
     control_messages_send
         .join(&control_messages_received)
-        .map(|(_key, (from, to))|
-             PagEdge {
-                 source: PagNode::from(&from),
-                 destination: PagNode::from(&to),
-                 edge_type: ActivityType::ControlMessage,
-                 operator_id: None,
-                 traverse: TraversalType::Unbounded,
-             })
+        .map(|(_key, (from, to))| PagEdge {
+            source: PagNode::from(&from),
+            destination: PagNode::from(&to),
+            edge_type: ActivityType::ControlMessage,
+            operator_id: None,
+            traverse: TraversalType::Unbounded,
+        })
 }

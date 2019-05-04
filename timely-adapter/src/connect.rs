@@ -8,27 +8,21 @@
 use std::{
     error::Error,
     fs::File,
+    io::Write,
     net::{TcpListener, TcpStream},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
-    io::Write,
 };
 
 use timely::{
     communication::allocator::Generic,
-    worker::Worker,
+    dataflow::operators::capture::{event::EventPusher, Event, EventReader, EventWriter},
     logging::{TimelyEvent, WorkerIdentifier},
-    dataflow::operators::capture::{
-        EventReader,
-        Event,
-        EventWriter,
-        event::EventPusher
-    }
+    worker::Worker,
 };
 
-use TimelyEvent::{Operates, Channels, Progress, Messages, Schedule, Text};
-
+use TimelyEvent::{Channels, Messages, Operates, Progress, Schedule, Text};
 
 /// Listens on 127.0.0.1:8000 and opens `source_peers` sockets from the
 /// computations we're examining (one socket for every worker on the
@@ -73,7 +67,10 @@ pub fn make_file_replayers(
     source_peers: usize,
     worker_peers: usize,
 ) -> Vec<Replayer<File>> {
-    info!("worker index: {}, source peers: {}, worker peers: {}", index, source_peers, worker_peers);
+    info!(
+        "worker index: {}, source peers: {}, worker peers: {}",
+        index, source_peers, worker_peers
+    );
     (0..source_peers)
         .filter(|i| i % worker_peers == index)
         .map(|i| {
@@ -95,11 +92,12 @@ pub fn make_file_replayers(
 pub fn register_logger(worker: &mut Worker<Generic>) {
     if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
         if let Ok(stream) = TcpStream::connect(&addr) {
-
             // SnailTrail should be able to keep up with an online computation.
             // If batch sizes are too large, they should be buffered. Blocking the
             // TCP connection is not an option as it slows down the main computation.
-            stream.set_nonblocking(true).expect("set_nonblocking call failed");
+            stream
+                .set_nonblocking(true)
+                .expect("set_nonblocking call failed");
 
             let writer = EventWriter::new(stream);
             log_pag(worker, writer);
@@ -124,7 +122,10 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
 /// 3. Dataflow setup is collapsed into t=1ns so that peel_operators is more efficient.
 /// 4. If the computation is bounded, capabilities will be dropped correctly at the end of
 ///    computation.
-fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>) {
+fn log_pag<W: 'static + Write>(
+    worker: &mut Worker<Generic>,
+    mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>,
+) {
     // first real frontier, used for setting up the computation
     // (`Operates` et al.)
     let mut new_frontier = Duration::from_nanos(1);
@@ -147,17 +148,20 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
     let index = worker.index();
     let mut total = 0;
 
-    worker.log_register()
-        .insert::<TimelyEvent,_>("timely", move |time, data| {
+    worker
+        .log_register()
+        .insert::<TimelyEvent, _>("timely", move |time, data| {
             for tuple in data.drain(..) {
                 match &tuple.2 {
-                    Channels(_) | Progress(_) | Messages(_) | Schedule(_)  => { buffer.push(tuple); },
+                    Channels(_) | Progress(_) | Messages(_) | Schedule(_) => {
+                        buffer.push(tuple);
+                    }
                     Operates(_) => {
                         // all operates events should happen in the initialization epoch,
                         // i.e., before any Text event epoch markers have been observed
                         assert!(new_frontier.as_nanos() == 1);
                         buffer.push((new_frontier, tuple.1, tuple.2));
-                    },
+                    }
                     Text(e) => {
                         // Text events mark epochs in the computation. They are always the first
                         // in their batch, so a single batch is never split into multiple epochs.
@@ -168,7 +172,7 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
                             // advance frontier at which events are buffered to current time
                             new_frontier = *time;
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -176,12 +180,24 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
             if buffer.len() > 0 && !wrap_up.1 {
                 // potentially downgrade capability to the new frontier
                 if new_frontier > curr_frontier {
-                    info!("w{}@ep{:?}: new epoch: {:?}", index, curr_frontier, new_frontier);
-                    writer.push(Event::Progress(vec![(new_frontier, 1), (curr_frontier, -1)]));
+                    info!(
+                        "w{}@ep{:?}: new epoch: {:?}",
+                        index, curr_frontier, new_frontier
+                    );
+                    writer.push(Event::Progress(vec![
+                        (new_frontier, 1),
+                        (curr_frontier, -1),
+                    ]));
                     curr_frontier = new_frontier;
                 }
 
-                trace!("w{} send @epoch{:?}: count: {} | total: {}", index, curr_frontier, buffer.len(), total);
+                trace!(
+                    "w{} send @epoch{:?}: count: {} | total: {}",
+                    index,
+                    curr_frontier,
+                    buffer.len(),
+                    total
+                );
 
                 total += buffer.len();
                 writer.push(Event::Messages(curr_frontier, buffer.clone()));
@@ -189,7 +205,10 @@ fn log_pag<W: 'static + Write> (worker: &mut Worker<Generic>, mut writer: EventW
             }
 
             if wrap_up.0 && !wrap_up.1 {
-                info!("w{}@ep{:?}: timely logging wrapping up | total: {}", index, curr_frontier, total);
+                info!(
+                    "w{}@ep{:?}: timely logging wrapping up | total: {}",
+                    index, curr_frontier, total
+                );
 
                 // free capabilities
                 writer.push(Event::Progress(vec![(curr_frontier, -1)]));
