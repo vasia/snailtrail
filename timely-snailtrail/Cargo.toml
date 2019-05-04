@@ -1,14 +1,16 @@
 [package]
-name = "timely-pag"
+name = "timely-snailtrail"
 version = "0.1.0"
 edition = "2018"
 
 [dependencies]
 abomonation = "0.7"
 abomonation_derive = "0.3"
-clap = "*"
-time = "*"
+log = "^0.4.0"
 timely = "^0.9"
 differential-dataflow = "^0.9"
 logformat = { version = "0.2.0", path = "../logformat" }
 timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }
+
+[dev-dependencies]
+env_logger = "^0.6.1"
