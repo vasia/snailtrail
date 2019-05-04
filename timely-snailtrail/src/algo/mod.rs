@@ -4,7 +4,7 @@ use std::{io::Read, time::Duration};
 
 use differential_dataflow::{
     input::{Input, InputSession},
-    operators::{arrange::ArrangeByKey, iterate::Iterate, join::JoinCore, reduce::Threshold},
+    operators::{arrange::ArrangeByKey, iterate::Iterate, join::JoinCore, reduce::{Count, Threshold}},
 };
 
 use timely::{communication::Allocate, dataflow::ProbeHandle, worker::Worker};
@@ -22,6 +22,7 @@ pub type Whitelist = InputSession<Duration, PagNode, isize>;
 pub type Blacklist = InputSession<Duration, PagEdge, isize>;
 
 /// Counts path length in the PAG generated from `replayers`, starting from nodes in the `whitelist`.
+/// Outputs # of reachable nodes from the given whitelist node.
 /// To simulate differential behavior on a changing PAG (this hopefully
 /// does not happen in a real-world setting), edges in the `blacklist`
 /// are stripped from the PAG.
@@ -55,6 +56,9 @@ pub fn path_length<R: 'static + Read, A: Allocate>(
                     .distinct()
             })
             .inspect(|x| println!("{:?}", x))
+            .map(|_| 0)
+            .count()
+            .inspect(|x| println!("count: {:?}", x))
             .probe();
 
         (probe, whitelist_handle, blacklist_handle)
