@@ -1,11 +1,26 @@
-use timely_adapter::connect::{make_replayers, open_sockets, make_file_replayers};
-use timely_adapter::make_log_records;
+use std::io::Read;
+use std::time::Duration;
+
+use timely_adapter::{
+    connect::{Replayer, make_replayers, open_sockets, make_file_replayers},
+    make_log_records
+};
 use timely_snailtrail::{
     pag,
     Config,
 };
-use timely::dataflow::operators::capture::replay::Replay;
-use timely::dataflow::operators::probe::Probe;
+
+use timely::{
+    worker::Worker,
+    communication::Allocate,
+    dataflow::{
+        ProbeHandle,
+        operators::{
+            capture::replay::Replay,
+            probe::Probe,
+        }
+    }
+};
 
 fn main() {
     let workers = std::env::args().nth(1).unwrap().parse::<String>().unwrap();
@@ -22,12 +37,11 @@ fn main() {
 
 fn inspector(config: Config) {
     // creates one socket per worker in the computation we're examining
-    let sockets;
-    if !config.from_file {
-        sockets = Some(open_sockets(config.source_peers));
+    let sockets = if !config.from_file {
+        Some(open_sockets(config.source_peers))
     } else {
-        sockets = None;
-    }
+        None
+    };
 
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {
         let timer = std::time::Instant::now();
@@ -38,20 +52,13 @@ fn inspector(config: Config) {
         }
 
         // read replayers from file (offline) or TCP stream (online)
-        let replayers = make_replayers(sockets.clone().unwrap(), worker.index(), worker.peers());
-        // let replayers = make_file_replayers(worker.index(), config.source_peers, worker.peers());
-
-        let probe = worker.dataflow(|scope| {
-            // use timely::dataflow::operators::inspect::Inspect;
-            // replayers.replay_into(scope).inspect_batch(|t, x| println!("{:?}", t)).probe()
-
-            // pag::create_pag(scope, replayers)
-            // replayers.replay_into(scope)
-            make_log_records(scope, replayers)
-                // .inspect(|x| println!("{:?}", x))
-                // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
-                .probe()
-        });
+        let probe = if let Some(sockets) = sockets.clone() {
+            let tcp_replayers = make_replayers(sockets, worker.index(), worker.peers());
+            dataflow(worker, tcp_replayers)
+        } else {
+            let file_replayers = make_file_replayers(worker.index(), config.source_peers, worker.peers());
+            dataflow(worker, file_replayers)
+        };
 
         let mut curr_frontier = vec![];
         while !probe.done() {
@@ -67,4 +74,21 @@ fn inspector(config: Config) {
 
         println!("w{} done: {}ms", index, timer.elapsed().as_millis());
     }).unwrap();
+}
+
+pub fn dataflow<R: 'static + Read, A: Allocate>(
+    worker: &mut Worker<A>,
+    replayers: Vec<Replayer<R>>,
+) -> ProbeHandle<Duration> {
+    worker.dataflow(|scope| {
+        // use timely::dataflow::operators::inspect::Inspect;
+        // replayers.replay_into(scope).inspect_batch(|t, x| println!("{:?}", t)).probe()
+
+        // pag::create_pag(scope, replayers)
+        // replayers.replay_into(scope)
+        make_log_records(scope, replayers)
+        // .inspect(|x| println!("{:?}", x))
+        // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
+            .probe()
+    })
 }

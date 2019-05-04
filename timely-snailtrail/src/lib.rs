@@ -24,6 +24,8 @@ pub struct Config {
     pub timely_args: Vec<String>,
     /// # of workers the profiled computation runs on
     pub source_peers: usize,
+    /// whether SnailTrail should read from file or TCP
+    pub from_file: bool,
 }
 
 // /// Elements of a complete activity graph, including ingress/egress points
