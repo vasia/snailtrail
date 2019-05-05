@@ -1,26 +1,17 @@
 //! Pag Construction
 //! Uses LogRecord representation to create a PAG that contains local and remote edges
 
-use std::{io::Read, time::Duration};
 use std::collections::HashMap;
+use std::{io::Read, time::Duration};
 
 use itertools::Itertools;
 
-use differential_dataflow::{
-    collection::AsCollection,
-    operators::join::Join,
-    Collection,
-};
+use differential_dataflow::{collection::AsCollection, operators::join::Join, Collection};
 
-use timely::dataflow::{
-    Scope,
-    operators::generic::operator::Operator,
-    channels::pact::Exchange
-};
+use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use timely_adapter::{connect::Replayer, make_log_records};
-
 
 /// A node in the PAG
 #[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy, Ord, PartialOrd)]
@@ -104,51 +95,67 @@ pub trait ConstructPAG<S: Scope<Timestamp = Duration>> {
 
 impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord, isize> {
     fn construct_pag(&self) -> Collection<S, PagEdge, isize> {
-        self.make_local_edges()
-            .concat(&self.make_control_edges())
-            // @TODO: DataMessages
-            // .concat(&self.make_data_edges())
+        self.make_local_edges().concat(&self.make_control_edges())
+        // @TODO: DataMessages
+        // .concat(&self.make_data_edges())
     }
 
     fn make_local_edges(&self) -> Collection<S, PagEdge, isize> {
-        self
-            .inner
-            .unary_frontier(Exchange::new(|(record, _time, _diff): &(LogRecord, Duration, isize)| record.local_worker), "local_edges", |_capability, _info| {
-                let mut buffer = Vec::new();
+        self.inner
+            .unary_frontier(
+                Exchange::new(|(record, _time, _diff): &(LogRecord, Duration, isize)| {
+                    record.local_worker
+                }),
+                "local_edges",
+                |_capability, _info| {
+                    let mut buffer = Vec::new();
 
-                // stores the last matched record for every epoch & worker_id
-                let mut prev_record: HashMap<(Duration, u64), LogRecord> = HashMap::new();
+                    // stores the last matched record for every epoch & worker_id
+                    let mut prev_record: HashMap<(Duration, u64), LogRecord> = HashMap::new();
 
-                move |input, output| {
-                    input.for_each(|cap, data| {
-                        data.swap(&mut buffer);
+                    move |input, output| {
+                        input.for_each(|cap, data| {
+                            data.swap(&mut buffer);
 
-                        // group by local_worker: we're building out separate paths
-                        for (_wid, group) in &buffer.drain(..).group_by(|(record, _, _)| record.local_worker) {
-                            for (record, t, diff) in group {
-                                // @TODO: handle unconsolidated inputs gracefully
-                                assert!(diff == 1);
+                            // group by local_worker: we're building out separate paths
+                            for (_wid, group) in &buffer
+                                .drain(..)
+                                .group_by(|(record, _, _)| record.local_worker)
+                            {
+                                for (record, t, diff) in group {
+                                    // @TODO: handle unconsolidated inputs gracefully
+                                    assert!(diff == 1);
 
-                                if let Some(prev) = prev_record.get(&(t, record.local_worker)) {
-                                    // delay to differential epochs: timely capability times and differential times
-                                    // don't necessarily match up (e.g., timely might batch more aggressively)
-                                    let delayed = cap.delayed(&t);
-                                    let mut session = output.session(&delayed);
-                                    session.give((Self::build_local_edge(prev, &record), t, diff));
-                                    prev_record.insert((t, record.local_worker), record);
-                                } else {
-                                    // the first node of an epoch
-                                    trace!("w{}'s first node of epoch {:?}: {:?}", record.local_worker, t, record);
-                                    prev_record.insert((t, record.local_worker), record);
+                                    if let Some(prev) = prev_record.get(&(t, record.local_worker)) {
+                                        // delay to differential epochs: timely capability times and differential times
+                                        // don't necessarily match up (e.g., timely might batch more aggressively)
+                                        let delayed = cap.delayed(&t);
+                                        let mut session = output.session(&delayed);
+                                        session.give((
+                                            Self::build_local_edge(prev, &record),
+                                            t,
+                                            diff,
+                                        ));
+                                        prev_record.insert((t, record.local_worker), record);
+                                    } else {
+                                        // the first node of an epoch
+                                        trace!(
+                                            "w{}'s first node of epoch {:?}: {:?}",
+                                            record.local_worker,
+                                            t,
+                                            record
+                                        );
+                                        prev_record.insert((t, record.local_worker), record);
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
 
-                    // (optional cleanup since we don't give capabilities to state)
-                    prev_record.retain(|(t, _), _| input.frontier().less_equal(t));
-                }
-            })
+                        // (optional cleanup since we don't give capabilities to state)
+                        prev_record.retain(|(t, _), _| input.frontier().less_equal(t));
+                    }
+                },
+            )
             .as_collection()
     }
 
@@ -194,7 +201,8 @@ impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord
 
         let control_messages_received = self
             .filter(|x| {
-                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received
+                x.activity_type == ActivityType::ControlMessage
+                    && x.event_type == EventType::Received
             })
             .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
