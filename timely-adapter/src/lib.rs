@@ -29,7 +29,7 @@ use timely::{
 
 use differential_dataflow::{
     collection::{AsCollection, Collection},
-    operators::{join::Join, reduce::Threshold},
+    operators::{join::Join, reduce::Threshold, consolidate::Consolidate},
 };
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
@@ -47,6 +47,7 @@ where
         .events_to_log_records()
         .as_collection()
         .peel_operators(&stream)
+        .consolidate() // @TODO: quite a performance hit, perhaps we can avoid this?
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation

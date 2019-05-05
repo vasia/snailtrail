@@ -116,6 +116,7 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
     }
 }
 
+// @TODO: further describe contract between log_pag and SnailTrail; mark as unsafe
 /// Registers a `TimelyEvent` logger which outputs relevant log events for PAG construction.
 /// 1. Only relevant events are written to `writer`.
 /// 2. Using `Text` events as markers, logged events are written out at one time per epoch.
@@ -160,6 +161,7 @@ fn log_pag<W: 'static + Write>(
                         // all operates events should happen in the initialization epoch,
                         // i.e., before any Text event epoch markers have been observed
                         assert!(new_frontier.as_nanos() == 1);
+
                         buffer.push((new_frontier, tuple.1, tuple.2));
                     }
                     Text(e) => {
