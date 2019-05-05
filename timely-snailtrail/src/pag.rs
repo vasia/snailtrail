@@ -83,61 +83,22 @@ pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
     // .concat(&data_edges)
 }
 
-fn make_local_edges<S: Scope<Timestamp = Duration>>(
+fn make_local_edges_reduce<S: Scope<Timestamp = Duration>>(
     records: &Collection<S, LogRecord, isize>,
 ) -> Collection<S, PagEdge, isize> {
     records
         .map(|x| (x.local_worker, x))
         .reduce(|_key, input, output| {
             let mut prev_record: Option<&LogRecord> = None;
-            let mut prev_node: Option<PagNode> = None;
 
             for (record, diff) in input {
-                if prev_record.is_none() {
-                    // first node for this worker
-                    prev_node = Some(PagNode::from(*record));
+                assert!(*diff == 1);
+
+                if let Some(prev) = prev_record.clone() {
+                    assert!(prev.local_worker == record.local_worker);
+                    output.push((build_local_edge(prev, *record), *diff));
                     prev_record = Some(*record);
                 } else {
-                    let make_edge_type = |prev: &LogRecord, curr: &LogRecord| {
-                        match (prev.event_type, curr.event_type) {
-                            // SchedStart ----> SchedEnd
-                            (EventType::Start, EventType::End) => ActivityType::Scheduling,
-                            // SchedEnd ----> SchedStart
-                            (EventType::End, EventType::Start) => ActivityType::BusyWaiting,
-                            // something ---> msgreceive
-                            (_, EventType::Received) => ActivityType::Waiting,
-                            // schedend -> remotesend, remote -> schedstart, remote -> remotesend
-                            (_, _) => ActivityType::Unknown, // @TODO
-                        }
-                    };
-
-                    let make_op_id = |prev: &LogRecord, curr: &LogRecord| {
-                        if prev.event_type == EventType::Start && curr.event_type == EventType::End
-                        {
-                            curr.operator_id
-                        } else {
-                            None
-                        }
-                    };
-
-                    let destination = PagNode::from(*record);
-
-                    let edge_type = make_edge_type(&prev_record.unwrap(), &record);
-                    let edge = PagEdge {
-                        source: prev_node.unwrap(),
-                        destination,
-                        edge_type,
-                        operator_id: make_op_id(&prev_record.unwrap(), &record),
-                        traverse: if edge_type == ActivityType::Waiting {
-                            TraversalType::Block
-                        } else {
-                            TraversalType::Unbounded
-                        },
-                    };
-
-                    output.push((edge, *diff));
-
-                    prev_node = Some(destination);
                     prev_record = Some(*record);
                 }
             }
