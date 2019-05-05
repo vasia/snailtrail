@@ -145,6 +145,38 @@ fn make_local_edges<S: Scope<Timestamp = Duration>>(
         .map(|(_key, x)| x)
 }
 
+fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
+    let edge_type = match (prev.event_type, record.event_type) {
+        // SchedStart ----> SchedEnd
+        (EventType::Start, EventType::End) => ActivityType::Scheduling,
+        // SchedEnd ----> SchedStart
+        (EventType::End, EventType::Start) => ActivityType::BusyWaiting,
+        // something ---> msgreceive
+        (_, EventType::Received) => ActivityType::Waiting,
+        // schedend -> remotesend, remote -> schedstart, remote -> remotesend
+        (_, _) => ActivityType::Unknown, // @TODO
+    };
+
+    let operator_id = if prev.operator_id == record.operator_id {
+        prev.operator_id
+    } else {
+        None
+    };
+
+    let traverse = if edge_type == ActivityType::Waiting {
+        TraversalType::Block
+    } else {
+        TraversalType::Unbounded
+    };
+
+    PagEdge {
+        source: PagNode::from(prev),
+        destination: PagNode::from(record),
+        edge_type,
+        operator_id,
+        traverse,
+    }
+}
 fn make_control_edges<S: Scope<Timestamp = Duration>>(
     records: &Collection<S, LogRecord, isize>,
 ) -> Collection<S, PagEdge, isize> {
