@@ -2,16 +2,25 @@
 //! Uses LogRecord representation to create a PAG that contains local and remote edges
 
 use std::{io::Read, time::Duration};
+use std::collections::HashMap;
+
+use itertools::Itertools;
 
 use differential_dataflow::{
-    operators::{join::Join, reduce::Reduce},
+    collection::AsCollection,
+    operators::join::Join,
     Collection,
 };
 
-use timely::dataflow::Scope;
+use timely::dataflow::{
+    Scope,
+    operators::generic::operator::Operator,
+    channels::pact::Exchange
+};
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use timely_adapter::{connect::Replayer, make_log_records};
+
 
 /// A node in the PAG
 #[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy, Ord, PartialOrd)]
@@ -74,92 +83,129 @@ pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
     // same results regardless of worker count, received events always have a remote worker
     // matched remote events are (remote-count / 2), remote event count is always even
 
-    let local_edges = make_local_edges(&records);
-    let control_edges = make_control_edges(&records);
+    records.construct_pag()
+}
+
+/// Operator that converts a Stream of LogRecords to a PAG
+pub trait ConstructPAG<S: Scope<Timestamp = Duration>> {
+    /// Builds a PAG from `LogRecord` by concatenating local edges, control edges
+    /// and data edges.
+    fn construct_pag(&self) -> Collection<S, PagEdge, isize>;
+    /// Takes `LogRecord`s and connects local edges (per epoch, per worker)
+    fn make_local_edges(&self) -> Collection<S, PagEdge, isize>;
+    /// Helper to create a `PagEdge` from two `LogRecord`s
+    fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
+    /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
+    fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
     // @TODO: DataMessages
-    // let data_edges = make_data_edges(&records);
-
-    local_edges.concat(&control_edges)
-    // .concat(&data_edges)
+    // /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
+    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
 }
 
-fn make_local_edges_reduce<S: Scope<Timestamp = Duration>>(
-    records: &Collection<S, LogRecord, isize>,
-) -> Collection<S, PagEdge, isize> {
-    records
-        .map(|x| (x.local_worker, x))
-        .reduce(|_key, input, output| {
-            let mut prev_record: Option<&LogRecord> = None;
-
-            for (record, diff) in input {
-                assert!(*diff == 1);
-
-                if let Some(prev) = prev_record.clone() {
-                    assert!(prev.local_worker == record.local_worker);
-                    output.push((build_local_edge(prev, *record), *diff));
-                    prev_record = Some(*record);
-                } else {
-                    prev_record = Some(*record);
-                }
-            }
-        })
-        .map(|(_key, x)| x)
-}
-
-fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
-    let edge_type = match (prev.event_type, record.event_type) {
-        // SchedStart ----> SchedEnd
-        (EventType::Start, EventType::End) => ActivityType::Scheduling,
-        // SchedEnd ----> SchedStart
-        (EventType::End, EventType::Start) => ActivityType::BusyWaiting,
-        // something ---> msgreceive
-        (_, EventType::Received) => ActivityType::Waiting,
-        // schedend -> remotesend, remote -> schedstart, remote -> remotesend
-        (_, _) => ActivityType::Unknown, // @TODO
-    };
-
-    let operator_id = if prev.operator_id == record.operator_id {
-        prev.operator_id
-    } else {
-        None
-    };
-
-    let traverse = if edge_type == ActivityType::Waiting {
-        TraversalType::Block
-    } else {
-        TraversalType::Unbounded
-    };
-
-    PagEdge {
-        source: PagNode::from(prev),
-        destination: PagNode::from(record),
-        edge_type,
-        operator_id,
-        traverse,
+impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord, isize> {
+    fn construct_pag(&self) -> Collection<S, PagEdge, isize> {
+        self.make_local_edges()
+            .concat(&self.make_control_edges())
+            // @TODO: DataMessages
+            // .concat(&self.make_data_edges())
     }
-}
-fn make_control_edges<S: Scope<Timestamp = Duration>>(
-    records: &Collection<S, LogRecord, isize>,
-) -> Collection<S, PagEdge, isize> {
-    let control_messages_send = records
-        .filter(|x| {
-            x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
-        })
-        .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
-    let control_messages_received = records
-        .filter(|x| {
-            x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received
-        })
-        .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+    fn make_local_edges(&self) -> Collection<S, PagEdge, isize> {
+        self
+            .inner
+            .unary_frontier(Exchange::new(|(record, _time, _diff): &(LogRecord, Duration, isize)| record.local_worker), "local_edges", |_capability, _info| {
+                let mut buffer = Vec::new();
 
-    control_messages_send
-        .join(&control_messages_received)
-        .map(|(_key, (from, to))| PagEdge {
-            source: PagNode::from(&from),
-            destination: PagNode::from(&to),
-            edge_type: ActivityType::ControlMessage,
-            operator_id: None,
-            traverse: TraversalType::Unbounded,
-        })
+                // stores the last matched record for every epoch & worker_id
+                let mut prev_record: HashMap<(Duration, u64), LogRecord> = HashMap::new();
+
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        data.swap(&mut buffer);
+
+                        // group by local_worker: we're building out separate paths
+                        for (_wid, group) in &buffer.drain(..).group_by(|(record, _, _)| record.local_worker) {
+                            for (record, t, diff) in group {
+                                // @TODO: handle unconsolidated inputs gracefully
+                                assert!(diff == 1);
+
+                                if let Some(prev) = prev_record.get(&(t, record.local_worker)) {
+                                    // delay to differential epochs: timely capability times and differential times
+                                    // don't necessarily match up (e.g., timely might batch more aggressively)
+                                    let delayed = cap.delayed(&t);
+                                    let mut session = output.session(&delayed);
+                                    session.give((Self::build_local_edge(prev, &record), t, diff));
+                                    prev_record.insert((t, record.local_worker), record);
+                                } else {
+                                    // the first node of an epoch
+                                    trace!("w{}'s first node of epoch {:?}: {:?}", record.local_worker, t, record);
+                                    prev_record.insert((t, record.local_worker), record);
+                                }
+                            }
+                        }
+                    });
+
+                    // (optional cleanup since we don't give capabilities to state)
+                    prev_record.retain(|(t, _), _| input.frontier().less_equal(t));
+                }
+            })
+            .as_collection()
+    }
+
+    fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
+        let edge_type = match (prev.event_type, record.event_type) {
+            // SchedStart ----> SchedEnd
+            (EventType::Start, EventType::End) => ActivityType::Scheduling,
+            // SchedEnd ----> SchedStart
+            (EventType::End, EventType::Start) => ActivityType::BusyWaiting,
+            // something ---> msgreceive
+            (_, EventType::Received) => ActivityType::Waiting,
+            // schedend -> remotesend, remote -> schedstart, remote -> remotesend
+            (_, _) => ActivityType::Unknown, // @TODO
+        };
+
+        let operator_id = if prev.operator_id == record.operator_id {
+            prev.operator_id
+        } else {
+            None
+        };
+
+        let traverse = if edge_type == ActivityType::Waiting {
+            TraversalType::Block
+        } else {
+            TraversalType::Unbounded
+        };
+
+        PagEdge {
+            source: PagNode::from(prev),
+            destination: PagNode::from(record),
+            edge_type,
+            operator_id,
+            traverse,
+        }
+    }
+
+    fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
+        let control_messages_send = self
+            .filter(|x| {
+                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
+            })
+            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
+
+        let control_messages_received = self
+            .filter(|x| {
+                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received
+            })
+            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+
+        control_messages_send
+            .join(&control_messages_received)
+            .map(|(_key, (from, to))| PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: ActivityType::ControlMessage,
+                operator_id: None,
+                traverse: TraversalType::Unbounded,
+            })
+    }
 }
