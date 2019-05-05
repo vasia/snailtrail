@@ -18,76 +18,74 @@ use timely::dataflow::operators::CapabilityRef;
 use timely::logging::{Logger, TimelyEvent};
 use timely::worker::Worker;
 
-use timely_adapter::connect::register_file_dumper;
+use timely_adapter::connect::register_logger;
 
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {
+        register_logger(worker);
+
         let index = worker.index();
         let mut input = InputSession::new();
-
-        // for now, dump logs to file instead of TCP
-        register_file_dumper(worker);
 
         // define a new computation.
         let probe = worker.dataflow(|scope| {
             // create a new collection from our input.
             let input_coll = input.to_collection(scope);
 
-            let mut vector: Vec<(usize, usize, usize)> = Vec::new();
+            // let mut vector: Vec<(usize, usize, usize)> = Vec::new();
 
             input_coll
                 .inspect(|(x, t, diff)| println!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 .map(|x| (0, x))
-                .reduce(|_key, input, output| {
-                    let mut sum = 0;
-                    for (x, diff) in input {
-                        for i in 0..*diff {
-                            if i >= 0 {
-                                sum += *x;
-                            }
-                        }
-                    }
-                    output.push((sum * 100, 1))
-                })
+                // .reduce(|_key, input, output| {
+                //     let mut sum = 0;
+                //     for (x, diff) in input {
+                //         for i in 0..*diff {
+                //             if i >= 0 {
+                //                 sum += *x;
+                //             }
+                //         }
+                //     }
+                //     output.push((sum * 100, 1))
+                // })
                 .inspect(|(x, t, diff)| println!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
-                .inner
-                .unary(
-                    Pipeline,
-                    "example",
-                    |default_cap: Capability<usize>, _info| {
-                        let mut cap = Some(default_cap.delayed(&12));
-                        let mut vector = Vec::new();
-                        move |input, output| {
-                            if let Some(ref c) = cap.take() {
-                                output.session(&c).give(((100, 100), 0, 0));
-                            }
-                            while let Some((time, data)) = input.next() {
-                                data.swap(&mut vector);
-                                output.session(&time).give_vec(&mut vector);
-                            }
-                        }
-                    },
-                )
+                // .inner
+                // .unary(
+                //     Pipeline,
+                //     "example",
+                //     |default_cap: Capability<usize>, _info| {
+                //         let mut cap = Some(default_cap.delayed(&12));
+                //         let mut vector = Vec::new();
+                //         move |input, output| {
+                //             if let Some(ref c) = cap.take() {
+                //                 output.session(&c).give(((100, 100), 0, 0));
+                //             }
+                //             while let Some((time, data)) = input.next() {
+                //                 data.swap(&mut vector);
+                //                 output.session(&time).give_vec(&mut vector);
+                //             }
+                //         }
+                //     },
+                // )
                 .probe()
         });
 
         let batch = 3;
-        let rounds = 2;
+        let rounds = 10;
         // let batch = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
         // let rounds = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
 
         // handle to `timely` events logger
-        let timely_logger = worker
-            .log_register()
-            .get::<TimelyEvent>("timely")
-            .expect("Timely logger absent.");
+        let timely_logger = worker.log_register().get::<TimelyEvent>("timely");
 
         input.advance_to(0);
 
-        timely_logger.log(TimelyEvent::Text(format!(
-            "[st] begin computation at epoch: {:?}",
-            input.time()
-        )));
+        if let Some(timely_logger) = &timely_logger {
+            timely_logger.log(TimelyEvent::Text(format!(
+                "[st] begin computation at epoch: {:?}",
+                input.time()
+            )));
+        }
 
         for round in 0..rounds {
             for i in 0..batch {
@@ -102,12 +100,16 @@ fn main() {
                 worker.step();
             }
 
-            // @TODO: this and other timely events aren't consistently
-            // flushed when stalling the application beforehand.
-            timely_logger.log(TimelyEvent::Text(format!(
-                "[st] closed times before: {:?}",
-                input.time()
-            )));
+            if let Some(timely_logger) = &timely_logger {
+                timely_logger.log(TimelyEvent::Text(format!(
+                    "[st] closed times before: {:?}",
+                    input.time()
+                )));
+            }
+        }
+
+        if let Some(timely_logger) = &timely_logger {
+            timely_logger.log(TimelyEvent::Text("[st] computation done".to_string()));
         }
 
         // stall application
