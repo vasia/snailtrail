@@ -1,9 +1,13 @@
-//! Helpers to obtain traces from timely / differential.
-//! The TCP connector \[1\] allows connecting to a live timely / differential instance.
-//! The file connector allows to replay serialized trace dumps.
-//! The file dumper can be used to dump traces to be read by the file connector.
+//! Helpers to obtain traces suitable for PAG construction from timely / differential.
 //!
-//! \[1\] Modified from TimelyDataflow examples & https://github.com/utaal/timely-viz
+//! To log a computation, use `register_logger` at its beginning. If
+//! `SNAILTRAIL_ADDR=<IP>:<Port>` is set as env variable, the computation will be logged
+//! online via TCP. Regardless of offline/online logging, `register_logger`'s contract has
+//! to be upheld. See `log_pag`'s docstring for more information.
+//!
+//! To obtain the logged computation's events, use `make_replayers` and `replay_into` them
+//! into a dataflow of your choice. If you pass `Some(sockets)` created with `open_sockets`
+//! to `make_replayer`, an online connection will be used as the event source.
 
 use std::{
     error::Error,
@@ -110,7 +114,7 @@ pub fn make_replayers(
     }
 }
 
-/// Batched logging of events to TCP or file.
+/// Logging of events to TCP or file.
 /// For live analysis, provide `SNAILTRAIL_ADDR` as env variable.
 /// Else, the computation will log to file for later replay.
 pub fn register_logger(worker: &mut Worker<Generic>) {
@@ -124,7 +128,7 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
                 .expect("set_nonblocking call failed");
 
             let writer = EventWriter::new(stream);
-            log_pag(worker, writer);
+            unsafe { log_pag(worker, writer); }
         } else {
             panic!("Could not connect logging stream to: {:?}", addr);
         }
@@ -136,18 +140,32 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
             Ok(file) => file,
         };
         let writer = EventWriter::new(file);
-        log_pag(worker, writer);
+        unsafe { log_pag(worker, writer); }
     }
 }
 
 // @TODO: further describe contract between log_pag and SnailTrail; mark as unsafe
+// @TODO: for triangles query with round size == 1, the computation is slowed down by TCP.
+//        A reason for this might be the overhead in creating TCP packets, so it might be
+//        worthwhile investigating the reintroduction of batching for very small computation
+//        rounds.
 /// Registers a `TimelyEvent` logger which outputs relevant log events for PAG construction.
 /// 1. Only relevant events are written to `writer`.
 /// 2. Using `Text` events as markers, logged events are written out at one time per epoch.
 /// 3. Dataflow setup is collapsed into t=1ns so that peel_operators is more efficient.
 /// 4. If the computation is bounded, capabilities will be dropped correctly at the end of
 ///    computation.
-fn log_pag<W: 'static + Write>(
+///
+/// This function is marked `unsafe` as it relies on an implicit contract with the
+/// logged computation:
+/// 1. After `advance_to(0)`, the beginning of computation should be logged:
+///    `"[st] begin computation at epoch: {:?}"`
+/// 2. After each epoch's `worker.step()`, the epoch progress should be logged:
+///    `"[st] closed times before: {:?}"`
+/// 3. (optional) After the last round, the end of the computation should be logged:
+///    `"[st] computation done"`
+/// Failing to do so might have unexpected effects on the PAG creation.
+unsafe fn log_pag<W: 'static + Write>(
     worker: &mut Worker<Generic>,
     mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>,
 ) {
@@ -188,10 +206,9 @@ fn log_pag<W: 'static + Write>(
 
                         buffer.push((new_frontier, tuple.1, tuple.2));
                     }
+                    // Text events mark epochs in the computation. They are always the first
+                    // in their batch, so a single batch is never split into multiple epochs.
                     Text(e) => {
-                        // Text events mark epochs in the computation. They are always the first
-                        // in their batch, so a single batch is never split into multiple epochs.
-
                         if e.starts_with("[st] computation done") {
                             wrap_up = (true, false);
                         } else {
