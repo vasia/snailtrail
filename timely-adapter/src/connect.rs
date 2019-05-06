@@ -8,7 +8,7 @@
 use std::{
     error::Error,
     fs::File,
-    io::Write,
+    io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
     sync::{Arc, Mutex},
@@ -24,9 +24,30 @@ use timely::{
 
 use TimelyEvent::{Channels, Messages, Operates, Progress, Schedule, Text};
 
+/// A replayer that reads data to be streamed into timely
+pub type Replayer<R> = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), R>;
+
+/// Types of replayer to be created from `make_replayers`
+pub enum ReplayerType {
+    /// a TCP-backed online replayer
+    Tcp(TcpStream),
+    /// a file-backed offline replayer
+    File(File),
+}
+
+impl Read for ReplayerType {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            ReplayerType::Tcp(x) => x.read(buf),
+            ReplayerType::File(x) => x.read(buf),
+        }
+    }
+}
+
 /// Listens on 127.0.0.1:8000 and opens `source_peers` sockets from the
 /// computations we're examining (one socket for every worker on the
-/// examined computation)
+/// examined computation).
+/// Adapted from TimelyDataflow examples / https://github.com/utaal/timely-viz
 pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     Arc::new(Mutex::new(
@@ -36,54 +57,57 @@ pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
     ))
 }
 
-/// A replayer that reads data to be streamed into timely
-pub type Replayer<R> = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), R>;
-
-// @TODO TCP stream optimization might be necessary (e.g. smarter consumption of batches)
-/// Construct replayers that read data from sockets and can stream it into
-/// timely dataflow.
-pub fn make_replayers(
-    sockets: Arc<Mutex<Vec<Option<TcpStream>>>>,
-    index: usize,
-    peers: usize,
-) -> Vec<Replayer<TcpStream>> {
-    sockets
-        .lock()
-        .unwrap()
-        .iter_mut()
-        .enumerate()
-        .filter(|(i, _)| *i % peers == index)
-        .map(move |(_, s)| s.take().unwrap())
-        .map(|r| EventReader::<Duration, (Duration, WorkerIdentifier, TimelyEvent), _>::new(r))
-        .collect::<Vec<_>>()
-}
-
 // @TODO Currently, the computation runs best with worker_peers == source_peers.
 // It might be worth investigating how replaying could benefit from worker_peers > source_peers.
-/// Construct replayers that read data from a file and can stream it into
-/// timely dataflow.
-pub fn make_file_replayers(
-    index: usize,
-    source_peers: usize,
+// @TODO TCP stream optimization might be necessary (e.g. smarter consumption of batches)
+/// Construct replayers that read data from sockets or file and can stream it into
+/// timely dataflow. If `Some(sockets)` is passed, the replayers assume an online setting.
+/// Adapted from TimelyDataflow examples / https://github.com/utaal/timely-viz
+pub fn make_replayers(
+    worker_index: usize,
     worker_peers: usize,
-) -> Vec<Replayer<File>> {
+    source_peers: usize,
+    sockets: Option<Arc<Mutex<Vec<Option<TcpStream>>>>>,
+) -> Vec<Replayer<ReplayerType>> {
     info!(
-        "worker index: {}, source peers: {}, worker peers: {}",
-        index, source_peers, worker_peers
+        "Creating replayers\tworker index: {}, worker peers: {}, source peers: {}, online: {}",
+        worker_index,
+        worker_peers,
+        source_peers,
+        sockets.is_some()
     );
-    (0..source_peers)
-        .filter(|i| i % worker_peers == index)
-        .map(|i| {
-            let name = format!("{:?}.dump", i);
-            let path = Path::new(&name);
 
-            match File::open(&path) {
-                Err(why) => panic!("couldn't open. {}", why.description()),
-                Ok(file) => file,
-            }
-        })
-        .map(|f| EventReader::new(f))
-        .collect::<Vec<_>>()
+    if let Some(sockets) = sockets {
+        // online
+        sockets
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| *i % worker_peers == worker_index)
+            .map(move |(_, s)| s.take().unwrap())
+            .map(|r| {
+                EventReader::<Duration, (Duration, WorkerIdentifier, TimelyEvent), _>::new(
+                    ReplayerType::Tcp(r),
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        // from file
+        (0..source_peers)
+            .filter(|i| i % worker_peers == worker_index)
+            .map(|i| {
+                let name = format!("{:?}.dump", i);
+                let path = Path::new(&name);
+
+                match File::open(&path) {
+                    Err(why) => panic!("couldn't open. {}", why.description()),
+                    Ok(file) => file,
+                }
+            })
+            .map(|f| EventReader::new(ReplayerType::File(f)))
+            .collect::<Vec<_>>()
+    }
 }
 
 /// Batched logging of events to TCP or file.
