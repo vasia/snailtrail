@@ -1,19 +1,12 @@
-use std::io::Read;
-use std::time::Duration;
-
 use timely_adapter::{
-    connect::{make_file_replayers, make_replayers, open_sockets, Replayer},
+    connect::{make_replayers, open_sockets},
     make_log_records,
 };
 use timely_snailtrail::{pag, Config};
 
-use timely::{
-    communication::Allocate,
-    dataflow::{
-        operators::{capture::replay::Replay, probe::Probe},
-        ProbeHandle,
-    },
-    worker::Worker,
+use timely::dataflow::{
+    operators::{capture::replay::Replay, probe::Probe},
+    ProbeHandle,
 };
 
 fn main() {
@@ -50,14 +43,28 @@ fn inspector(config: Config) {
         }
 
         // read replayers from file (offline) or TCP stream (online)
-        let probe = if let Some(sockets) = sockets.clone() {
-            let tcp_replayers = make_replayers(sockets, worker.index(), worker.peers());
-            dataflow(worker, tcp_replayers)
-        } else {
-            let file_replayers =
-                make_file_replayers(worker.index(), config.source_peers, worker.peers());
-            dataflow(worker, file_replayers)
-        };
+        let replayers = make_replayers(
+            worker.index(),
+            worker.peers(),
+            config.source_peers,
+            sockets.clone(),
+        );
+        let probe = worker.dataflow(|scope| {
+            // current dataset (overall times, adding steps in):
+            // 2w, debug
+            // read_in: ~2500ms
+            // log_records no peel: ~2600ms
+            // log_records with peel: ~3600ms
+            // pag local edges: ~9400ms
+            // pag control edges: ~9400ms
+
+            pag::create_pag(scope, replayers)
+                // replayers.replay_into(scope)
+                // make_log_records(scope, replayers)
+                // .inspect(|x| println!("{:?}", x))
+                // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
+                .probe()
+        });
 
         let mut curr_frontier = vec![];
         while !probe.done() {
@@ -74,21 +81,4 @@ fn inspector(config: Config) {
         println!("w{} done: {}ms", index, timer.elapsed().as_millis());
     })
     .unwrap();
-}
-
-pub fn dataflow<R: 'static + Read, A: Allocate>(
-    worker: &mut Worker<A>,
-    replayers: Vec<Replayer<R>>,
-) -> ProbeHandle<Duration> {
-    worker.dataflow(|scope| {
-        // use timely::dataflow::operators::inspect::Inspect;
-        // replayers.replay_into(scope).inspect_batch(|t, x| println!("{:?}", t)).probe()
-
-        // pag::create_pag(scope, replayers)
-        // replayers.replay_into(scope)
-        make_log_records(scope, replayers)
-            // .inspect(|x| println!("{:?}", x))
-            // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
-            .probe()
-    })
 }
