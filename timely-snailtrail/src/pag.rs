@@ -193,27 +193,46 @@ impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord
     }
 
     fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
-        let control_messages_send = self
+        let sent = self
             .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
             })
             .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
-        let control_messages_received = self
+        let received = self
             .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage
                     && x.event_type == EventType::Received
             })
             .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
-        control_messages_send
-            .join(&control_messages_received)
+        sent.join(&received)
             .map(|(_key, (from, to))| PagEdge {
                 source: PagNode::from(&from),
                 destination: PagNode::from(&to),
                 edge_type: ActivityType::ControlMessage,
                 operator_id: None,
                 traverse: TraversalType::Unbounded,
+            })
+    }
+
+    // @TODO: use channel information to reposition data message in front of the operator it was intended for
+    fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
+        let sent = self
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+
+        let received = self
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x));
+
+        sent.join(&received)
+            .map(|(_key, (from, to))| PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: ActivityType::DataMessage,
+                operator_id: None, // could be used to store op info
+                traverse: TraversalType::Unbounded
             })
     }
 }
