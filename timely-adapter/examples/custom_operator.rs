@@ -21,8 +21,11 @@ use timely::worker::Worker;
 use timely_adapter::connect::register_logger;
 
 fn main() {
+    env_logger::init();
+
     timely::execute_from_args(std::env::args(), |worker| {
         register_logger(worker);
+        let timer = std::time::Instant::now();
 
         let index = worker.index();
         let mut input = InputSession::new();
@@ -37,17 +40,17 @@ fn main() {
             input_coll
                 .inspect(|(x, t, diff)| println!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 .map(|x| (0, x))
-                // .reduce(|_key, input, output| {
-                //     let mut sum = 0;
-                //     for (x, diff) in input {
-                //         for i in 0..*diff {
-                //             if i >= 0 {
-                //                 sum += *x;
-                //             }
-                //         }
-                //     }
-                //     output.push((sum * 100, 1))
-                // })
+                .reduce(|_key, input, output| {
+                    let mut sum = 0;
+                    for (x, diff) in input {
+                        for i in 0..*diff {
+                            if i >= 0 {
+                                sum += *x;
+                            }
+                        }
+                    }
+                    output.push((sum * 100, 1))
+                })
                 .inspect(|(x, t, diff)| println!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 // .inner
                 // .unary(
@@ -70,8 +73,8 @@ fn main() {
                 .probe()
         });
 
-        let batch = 3;
-        let rounds = 10;
+        let batch = 10;
+        let rounds = 5;
         // let batch = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
         // let rounds = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
 
@@ -99,6 +102,7 @@ fn main() {
             while probe.less_than(input.time()) {
                 worker.step();
             }
+            println!("{:?}\tRound {} complete", timer.elapsed(), round);
 
             if let Some(timely_logger) = &timely_logger {
                 timely_logger.log(TimelyEvent::Text(format!(
