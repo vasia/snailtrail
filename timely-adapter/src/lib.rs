@@ -10,6 +10,7 @@ extern crate log;
 pub mod connect;
 use crate::connect::Replayer;
 
+use logformat::pair::Pair;
 use logformat::{ActivityType, EventType, LogRecord};
 
 use std::io::Read;
@@ -39,27 +40,30 @@ pub fn make_log_records<S, R>(
     replayers: Vec<Replayer<R>>,
 ) -> Collection<S, LogRecord, isize>
 where
-    S: Scope<Timestamp = Duration>,
+    S: Scope<Timestamp = Pair<u64, Duration>>,
     R: Read + 'static,
 {
+    use timely::dataflow::operators::inspect::Inspect;
     let stream = replayers.replay_into(scope);
     stream
+        // .inspect_time(|t, x| println!("{:?} \t {:?}", t, x))
         .events_to_log_records()
         .as_collection()
         .peel_operators(&stream)
-        .consolidate() // @TODO: quite a performance hit, perhaps we can avoid this?
+        // .consolidate() // @TODO: quite a performance hit, perhaps we can avoid this?
+        // .inspect(|x| println!("a {:?}", x))
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
-trait EventsToLogRecords<S: Scope<Timestamp = Duration>> {
+trait EventsToLogRecords<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Converts a Stream of TimelyEvents to their LogRecord representation
-    fn events_to_log_records(&self) -> Stream<S, (LogRecord, Duration, isize)>;
+    fn events_to_log_records(&self) -> Stream<S, (LogRecord, Pair<u64, Duration>, isize)>;
 }
 
-impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
     for Stream<S, (Duration, usize, TimelyEvent)>
 {
-    fn events_to_log_records(&self) -> Stream<S, (LogRecord, Duration, isize)> {
+    fn events_to_log_records(&self) -> Stream<S, (LogRecord, Pair<u64, Duration>, isize)> {
         self.unary_frontier(Pipeline, "EpochalFlatMap", |_capability, _info| {
             // This only works since we're sure that each worker replays a consistent
             // worker log. In other cases, we'd need to implement a smarter stateful operator.
@@ -92,7 +96,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                         operator_id: Some(event.id as u64),
                                         channel_id: None,
                                     },
-                                    *retained.time(),
+                                    retained.time().clone(),
                                     1,
                                 ))
                             }
@@ -126,7 +130,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        *retained.time(),
+                                        retained.time().clone(),
                                         1,
                                     ))
                                 }
@@ -163,7 +167,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        *retained.time(),
+                                        retained.time().clone(),
                                         1,
                                     ))
                                 }
@@ -183,7 +187,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
 }
 
 /// Strips a `Collection` of `LogRecord`s from encompassing operators.
-trait PeelOperators<S: Scope<Timestamp = Duration>> {
+trait PeelOperators<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Returns a stream of LogRecords where records that describe
     /// encompassing operators have been stripped off
     /// (e.g. the dataflow operator for every direct child,
@@ -194,7 +198,7 @@ trait PeelOperators<S: Scope<Timestamp = Duration>> {
     ) -> Collection<S, LogRecord, isize>;
 }
 
-impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecord, isize> {
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> PeelOperators<S> for Collection<S, LogRecord, isize> {
     fn peel_operators(
         &self,
         stream: &Stream<S, (Duration, usize, TimelyEvent)>,
@@ -206,11 +210,11 @@ impl<S: Scope<Timestamp = Duration>> PeelOperators<S> for Collection<S, LogRecor
                     if let Operates(event) = x {
                         Some((
                             (event.addr, Some(event.id as u64)),
-                            Duration::from_nanos(1),
+                            Pair::new(0, Duration::from_nanos(1)),
                             1,
                         ))
                     } else {
-                        unreachable!()
+                        None
                     }
                 } else {
                     None
