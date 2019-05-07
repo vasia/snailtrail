@@ -98,6 +98,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                             }
                             // data messages
                             Messages(event) => {
+                                // @TODO: push the filtering of local data messages into log_pag
                                 // discard local data messages for now
                                 if event.source == event.target {
                                     None
@@ -133,6 +134,7 @@ impl<S: Scope<Timestamp = Duration>> EventsToLogRecords<S>
                             // Control Messages
                             Progress(event) => {
                                 // discard local progress updates for now
+                                // @TODO: push the filtering of local control messages into log_pag
                                 if !event.is_send && event.source == wid {
                                     None
                                 } else {

@@ -59,6 +59,8 @@ pub struct PagEdge {
     pub traverse: TraversalType,
 }
 
+// @TODO currently, this creates a new pag per epoch, but never removes the old one.
+//       so state will continually grow and multiple pags exist side by side.
 /// Creates a PAG (a Collection of `PagEdge`s, grouped by epoch) from the provided `Replayer`s.
 /// To be called from within a timely computation.
 pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
@@ -88,16 +90,16 @@ pub trait ConstructPAG<S: Scope<Timestamp = Duration>> {
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
     /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
     fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
-    // @TODO: DataMessages
-    // /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
+    /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
+    fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
 }
 
 impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord, isize> {
     fn construct_pag(&self) -> Collection<S, PagEdge, isize> {
-        self.make_local_edges().concat(&self.make_control_edges())
-        // @TODO: DataMessages
-        // .concat(&self.make_data_edges())
+        // self.make_data_edges()
+        self.make_local_edges()
+            // .concat(&self.make_control_edges())
+            // .concat(&self.make_data_edges())
     }
 
     fn make_local_edges(&self) -> Collection<S, PagEdge, isize> {
@@ -111,7 +113,7 @@ impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord
                     let mut buffer = Vec::new();
 
                     // stores the last matched record for every epoch & worker_id
-                    let mut prev_record: HashMap<(Duration, u64), LogRecord> = HashMap::new();
+                    let mut prev_record = HashMap::new();
 
                     move |input, output| {
                         input.for_each(|cap, data| {

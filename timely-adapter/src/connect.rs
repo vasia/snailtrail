@@ -90,11 +90,7 @@ pub fn make_replayers(
             .enumerate()
             .filter(|(i, _)| *i % worker_peers == worker_index)
             .map(move |(_, s)| s.take().unwrap())
-            .map(|r| {
-                EventReader::<Duration, (Duration, WorkerIdentifier, TimelyEvent), _>::new(
-                    ReplayerType::Tcp(r),
-                )
-            })
+            .map(|r| EventReader::new(ReplayerType::Tcp(r)))
             .collect::<Vec<_>>()
     } else {
         // from file
@@ -195,11 +191,12 @@ unsafe fn log_pag<W: 'static + Write>(
         .log_register()
         .insert::<TimelyEvent, _>("timely", move |time, data| {
             for tuple in data.drain(..) {
+                // println!("time & event, {:?} \t {:?}", time, tuple);
                 match &tuple.2 {
-                    Channels(_) | Progress(_) | Messages(_) | Schedule(_) => {
+                    Progress(_) | Messages(_) | Schedule(_) => {
                         buffer.push(tuple);
                     }
-                    Operates(_) => {
+                    Operates(_) | Channels(_) => {
                         // all operates events should happen in the initialization epoch,
                         // i.e., before any Text event epoch markers have been observed
                         assert!(new_frontier.as_nanos() == 1);

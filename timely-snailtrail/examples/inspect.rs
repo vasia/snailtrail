@@ -57,12 +57,16 @@ fn inspector(config: Config) {
             // log_records with peel: ~3600ms
             // pag local edges: ~9400ms
             // pag control edges: ~9400ms
-
+            use differential_dataflow::operators::reduce::Count;
             pag::create_pag(scope, replayers)
                 // replayers.replay_into(scope)
                 // make_log_records(scope, replayers)
                 // .inspect(|x| println!("{:?}", x))
                 // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
+                // .inspect(|x| println!("{:?}", x))
+                .map(|_| 0)
+                .count()
+                // .inspect_batch(|t, x| println!("{:?}, count: {:?}", t, x))
                 .probe()
         });
 
@@ -78,6 +82,7 @@ fn inspector(config: Config) {
             worker.step();
         }
 
+        println!("done with stepping.");
         println!("w{} done: {}ms", index, timer.elapsed().as_millis());
     })
     .unwrap();
