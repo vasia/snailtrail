@@ -9,8 +9,6 @@ use timely::dataflow::{
     ProbeHandle,
 };
 
-use logformat::pair::Pair;
-
 fn main() {
     let workers = std::env::args().nth(1).unwrap().parse::<String>().unwrap();
     let source_peers = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
@@ -60,20 +58,19 @@ fn inspector(config: Config) {
             // pag local edges: ~9400ms
             // pag control edges: ~9400ms
             use differential_dataflow::operators::reduce::Count;
-            // pag::create_pag(scope, replayers)
+            pag::create_pag(scope, replayers)
                 // replayers.replay_into(scope)
-                make_log_records(scope, replayers)
+                // make_log_records(scope, replayers)
                 // .inspect(|x| println!("{:?}", x))
                 // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
                 // .inspect(|x| println!("{:?}", x))
-                // .map(|_| 0)
-                // .count()
+                .map(|_| 0)
+                .count()
                 // .inspect_batch(|t, x| println!("{:?}, count: {:?}", t, x))
                 .probe()
         });
 
         let mut curr_frontier = vec![];
-        // while probe.less_equal(&Pair::new(0, std::time::Duration::from_nanos(1))) {
         while !probe.done() {
             probe.with_frontier(|f| {
                 let f = f.to_vec();

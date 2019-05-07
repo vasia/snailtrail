@@ -26,12 +26,10 @@ use timely::{
     worker::Worker,
 };
 
-use logformat::pair::Pair;
-
 use TimelyEvent::{Channels, Messages, Operates, Progress, Schedule, Text};
 
 /// A replayer that reads data to be streamed into timely
-pub type Replayer<R> = EventReader<Pair<u64, Duration>, (Duration, WorkerIdentifier, TimelyEvent), R>;
+pub type Replayer<R> = EventReader<Duration, (Duration, WorkerIdentifier, TimelyEvent), R>;
 
 /// Types of replayer to be created from `make_replayers`
 pub enum ReplayerType {
@@ -165,15 +163,15 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
 /// Failing to do so might have unexpected effects on the PAG creation.
 unsafe fn log_pag<W: 'static + Write>(
     worker: &mut Worker<Generic>,
-    mut writer: EventWriter<Pair<u64, Duration>, (Duration, usize, TimelyEvent), W>,
+    mut writer: EventWriter<Duration, (Duration, usize, TimelyEvent), W>,
 ) {
     // first real frontier, used for setting up the computation
     // (`Operates` et al.)
-    let mut new_frontier = Pair::new(0, Duration::from_nanos(1));
+    let mut new_frontier = Duration::from_nanos(1);
 
     // initialized to 0, which we'll drop as soon as the
     // computation makes progress
-    let mut curr_frontier = Pair::new(0, Duration::default());
+    let mut curr_frontier = Duration::default();
 
     // buffer of relevant events for a batch. As a batch only ever belongs
     // to a single epoch (epoch markers only appear at the beginning of a batch),
@@ -196,15 +194,14 @@ unsafe fn log_pag<W: 'static + Write>(
                 // println!("time & event, {:?} \t {:?}", time, tuple);
                 match &tuple.2 {
                     Progress(_) | Messages(_) | Schedule(_) => {
-                        new_frontier = Pair::new(new_frontier.first, tuple.0);
                         buffer.push(tuple);
                     }
                     Operates(_) | Channels(_) => {
                         // all operates events should happen in the initialization epoch,
                         // i.e., before any Text event epoch markers have been observed
-                        assert!(new_frontier == Pair::new(0, Duration::from_nanos(1)));
+                        assert!(new_frontier.as_nanos() == 1);
 
-                        buffer.push((new_frontier.second, tuple.1, tuple.2));
+                        buffer.push((new_frontier, tuple.1, tuple.2));
                     }
                     // Text events mark epochs in the computation. They are always the first
                     // in their batch, so a single batch is never split into multiple epochs.
@@ -213,9 +210,7 @@ unsafe fn log_pag<W: 'static + Write>(
                             wrap_up = (true, false);
                         } else {
                             // advance frontier at which events are buffered to current time
-                            // Note: this is the tuple's time, not the time at which we currently
-                            // hand out events
-                            new_frontier = Pair::new(new_frontier.first + 1, tuple.0);
+                            new_frontier = *time;
                         }
                     }
                     _ => {}
@@ -223,20 +218,17 @@ unsafe fn log_pag<W: 'static + Write>(
             }
 
             if buffer.len() > 0 && !wrap_up.1 {
-                // @TODO: if this is too much overhead (called once per buffer batch),
-                //        system time progress could advance less often
                 // potentially downgrade capability to the new frontier
-                // timestamps strictly increase (event time can only increase, as does processing time)
                 if new_frontier > curr_frontier {
                     info!(
                         "w{}@ep{:?}: new epoch: {:?}",
                         index, curr_frontier, new_frontier
                     );
                     writer.push(Event::Progress(vec![
-                        (new_frontier.clone(), 1),
-                        (curr_frontier.clone(), -1),
+                        (new_frontier, 1),
+                        (curr_frontier, -1),
                     ]));
-                    curr_frontier = new_frontier.clone();
+                    curr_frontier = new_frontier;
                 }
 
                 trace!(
@@ -248,7 +240,7 @@ unsafe fn log_pag<W: 'static + Write>(
                 );
 
                 total += buffer.len();
-                writer.push(Event::Messages(curr_frontier.clone(), buffer.clone()));
+                writer.push(Event::Messages(curr_frontier, buffer.clone()));
                 buffer.drain(..);
             }
 
@@ -259,7 +251,7 @@ unsafe fn log_pag<W: 'static + Write>(
                 );
 
                 // free capabilities
-                writer.push(Event::Progress(vec![(curr_frontier.clone(), -1)]));
+                writer.push(Event::Progress(vec![(curr_frontier, -1)]));
 
                 // 1st to false so that marker isn't processed multiple times.
                 // 2nd to true so that no further `Event::Messages` will be sent.

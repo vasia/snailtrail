@@ -11,7 +11,6 @@ use differential_dataflow::{collection::AsCollection, operators::join::Join, Col
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
-use logformat::pair::Pair;
 use timely_adapter::{connect::Replayer, make_log_records};
 
 /// A node in the PAG
@@ -64,7 +63,7 @@ pub struct PagEdge {
 //       so state will continually grow and multiple pags exist side by side.
 /// Creates a PAG (a Collection of `PagEdge`s, grouped by epoch) from the provided `Replayer`s.
 /// To be called from within a timely computation.
-pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read>(
+pub fn create_pag<S: Scope<Timestamp = Duration>, R: 'static + Read>(
     scope: &mut S,
     replayers: Vec<Replayer<R>>,
 ) -> Collection<S, PagEdge, isize> {
@@ -81,7 +80,7 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read>(
 }
 
 /// Operator that converts a Stream of LogRecords to a PAG
-pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
+pub trait ConstructPAG<S: Scope<Timestamp = Duration>> {
     /// Builds a PAG from `LogRecord` by concatenating local edges, control edges
     /// and data edges.
     fn construct_pag(&self) -> Collection<S, PagEdge, isize>;
@@ -95,7 +94,7 @@ pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S, LogRecord, isize> {
+impl<S: Scope<Timestamp = Duration>> ConstructPAG<S> for Collection<S, LogRecord, isize> {
     fn construct_pag(&self) -> Collection<S, PagEdge, isize> {
         // self.make_data_edges()
         self.make_local_edges()
@@ -106,7 +105,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
     fn make_local_edges(&self) -> Collection<S, PagEdge, isize> {
         self.inner
             .unary_frontier(
-                Exchange::new(|(record, _time, _diff): &(LogRecord, Pair<u64, Duration>, isize)| {
+                Exchange::new(|(record, _time, _diff): &(LogRecord, Duration, isize)| {
                     record.local_worker
                 }),
                 "local_edges",
@@ -129,14 +128,14 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
                                     // @TODO: handle unconsolidated inputs gracefully
                                     assert!(diff == 1);
 
-                                    if let Some(prev) = prev_record.get(&(t.clone(), record.local_worker)) {
+                                    if let Some(prev) = prev_record.get(&(t, record.local_worker)) {
                                         // delay to differential epochs: timely capability times and differential times
                                         // don't necessarily match up (e.g., timely might batch more aggressively)
                                         let delayed = cap.delayed(&t);
                                         let mut session = output.session(&delayed);
                                         session.give((
                                             Self::build_local_edge(prev, &record),
-                                            t.clone(),
+                                            t,
                                             diff,
                                         ));
                                         prev_record.insert((t, record.local_worker), record);
@@ -145,7 +144,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
                                         trace!(
                                             "w{}'s first node of epoch {:?}: {:?}",
                                             record.local_worker,
-                                            t.clone(),
+                                            t,
                                             record
                                         );
                                         prev_record.insert((t, record.local_worker), record);
