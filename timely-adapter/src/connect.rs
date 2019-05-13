@@ -189,6 +189,9 @@ unsafe fn log_pag<W: 'static + Write>(
     let index = worker.index();
     let mut total = 0;
 
+    const MAX_FUEL: usize = 1024;
+    let mut fuel = MAX_FUEL;
+
     worker
         .log_register()
         .insert::<TimelyEvent, _>("timely", move |time, data| {
@@ -215,7 +218,7 @@ unsafe fn log_pag<W: 'static + Write>(
                             // advance frontier at which events are buffered to current time
                             // Note: this is the tuple's time, not the time at which we currently
                             // hand out events
-                            new_frontier = Pair::new(new_frontier.first + 1, tuple.0);
+                            new_frontier = Pair::new(new_frontier.first + 1, new_frontier.second);
                         }
                     }
                     _ => {}
@@ -223,11 +226,15 @@ unsafe fn log_pag<W: 'static + Write>(
             }
 
             if buffer.len() > 0 && !wrap_up.1 {
-                // @TODO: if this is too much overhead (called once per buffer batch),
-                //        system time progress could advance less often
+                fuel -= 1;
+
                 // potentially downgrade capability to the new frontier
                 // timestamps strictly increase (event time can only increase, as does processing time)
-                if new_frontier > curr_frontier {
+                if (new_frontier.first > curr_frontier.first) || fuel <= 0 {
+                    fuel = MAX_FUEL;
+
+                    assert!(new_frontier > curr_frontier);
+
                     info!(
                         "w{}@ep{:?}: new epoch: {:?}",
                         index, curr_frontier, new_frontier
