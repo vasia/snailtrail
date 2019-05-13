@@ -13,6 +13,7 @@ extern crate enum_primitive_derive;
 extern crate abomonation_derive;
 
 use std::io::{Write, Read};
+use std::cmp::Ordering;
 use num_traits::{FromPrimitive, ToPrimitive};
 
 use msgpack::decode::ValueReadError;
@@ -225,7 +226,7 @@ pub type ChannelId = u64;
 ///
 /// It is the underlying structure from which the PAG construction starts.
 /// If necessary, it can also be serialized e.g. into a `msgpack` representation.
-#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone, PartialOrd, Ord)]
+#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone)]
 pub struct LogRecord {
     /// Event time in nanoseconds since the Epoch (midnight, January 1, 1970 UTC).
     pub timestamp: Timestamp,
@@ -245,6 +246,19 @@ pub struct LogRecord {
     /// Unique id for the channel in the dataflow. This only applies for some event types, e.g. data / control messages.
     pub channel_id: Option<ChannelId>,
 }
+
+impl Ord for LogRecord {
+    fn cmp(&self, other: &LogRecord) -> Ordering {
+        self.timestamp.cmp(&other.timestamp)
+    }
+}
+
+impl PartialOrd for LogRecord {
+    fn partial_cmp(&self, other: &LogRecord) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 
 impl std::fmt::Display for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

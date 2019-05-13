@@ -13,6 +13,50 @@ use differential_dataflow::operators::consolidate::Consolidate;
 use differential_dataflow::operators::join::Join;
 use differential_dataflow::input::Input;
 
+use std::cmp::Ordering;
+
+#[macro_use]
+extern crate abomonation_derive;
+
+#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone)]
+struct Dupel {
+    first: u64,
+    second: u64,
+}
+
+impl Ord for Dupel {
+    fn cmp(&self, other: &Dupel) -> Ordering {
+        if self.first < other.first {
+            Ordering::Less
+        } else if self.first > other.first {
+            Ordering::Greater
+        } else {
+            if self.second < other.second {
+                Ordering::Greater // !
+            } else if self.second > other.second {
+                Ordering::Less
+            } else {
+                Ordering::Equal
+            }
+        }
+    }
+}
+
+impl PartialOrd for Dupel {
+    fn partial_cmp(&self, other: &Dupel) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[test]
+fn comparisons() {
+    assert!(Dupel { first: 1, second: 10 } < Dupel { first: 1, second: 8 });
+    assert!(Dupel { first: 1, second: 5 } > Dupel { first: 1, second: 8 });
+    assert!(Dupel { first: 1, second: 5 } < Dupel { first: 2, second: 8 });
+    assert!(Dupel { first: 2, second: 10 } == Dupel { first: 2, second: 10 });
+}
+
+
 fn main() {
     timely::execute_from_args(std::env::args(), move |worker| {
         let timer = std::time::Instant::now();
@@ -21,9 +65,15 @@ fn main() {
             let (blacklist_handle, blacklist) = scope.new_collection();
             let (input_handle, input) = scope.new_collection();
 
+            use differential_dataflow::operators::reduce::Count;
+
             let probe = input
                 .antijoin(&blacklist)
+                .map(|x: (u64, u64)| Dupel { first: x.0, second: x.1})
                 .consolidate()
+                .map(|_| 0)
+                .count()
+                .inspect(|x| println!("{:?}", x))
                 .probe();
 
             (blacklist_handle, input_handle, probe)
@@ -36,22 +86,22 @@ fn main() {
 
         input.advance_to(2);
         input.flush();
-        for i in 1 .. 10_00000 {
-            input.insert((3, i));
-        }
+        // for i in 1 .. 10_00000 {
+        //     input.insert((3, i));
+        // }
 
         // Inserting additional times doesn't affect
         // consolidate at all.
         // input.advance_to(3);
         // input.flush();
 
-        for i in 10_00000 .. 11_00000 {
-            input.insert((3, i));
-        }
+        // for i in 10_00000 .. 11_00000 {
+        //     input.insert((3, i));
+        // }
 
-        for i in 11_00000 .. 12_00000 {
-            input.insert((4, i));
-        }
+        // for i in 11_00000 .. 12_00000 {
+        //     input.insert((4, i));
+        // }
 
         // Inserting additional times doesn't affect
         // consolidate at all.
@@ -59,16 +109,33 @@ fn main() {
         // input.advance_to(4);
         // input.flush();
 
-        for i in 12_00000 .. 13_00000 {
+        for i in (12_00000 .. 15_00000).rev() {
+            input.insert((4, i));
+        }
+
+        // input.advance_to(3);
+        // input.flush();
+
+        std::thread::sleep_ms(1000);
+
+        for i in (14_00000 .. 15_00000).rev() {
+            input.insert((4, i));
+        }
+
+        // input.advance_to(4);
+        // input.flush();
+
+        std::thread::sleep_ms(1000);
+
+        for i in (13_00000 .. 14_00000).rev() {
             input.insert((4, i));
         }
 
         input.advance_to(5);
         input.flush();
-
-        for i in 0 .. 10 {
-            input.insert((5, i));
-        }
+        // for i in 0 .. 10 {
+        //     input.insert((5, i));
+        // }
 
         // drop(blacklist);
         // drop(input);

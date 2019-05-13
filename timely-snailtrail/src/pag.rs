@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::{io::Read, time::Duration};
+use std::cmp::Ordering;
 
 use itertools::Itertools;
 
@@ -15,12 +16,24 @@ use logformat::pair::Pair;
 use timely_adapter::{connect::Replayer, make_log_records};
 
 /// A node in the PAG
-#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy, Ord, PartialOrd)]
+#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy)]
 pub struct PagNode {
     /// Timestamp of the event (also a unique identifier!)
     pub timestamp: logformat::Timestamp,
     /// Unique ID of the worker the event belongs to
     pub worker_id: logformat::Worker,
+}
+
+impl Ord for PagNode {
+    fn cmp(&self, other: &PagNode) -> Ordering {
+        self.timestamp.cmp(&other.timestamp)
+    }
+}
+
+impl PartialOrd for PagNode {
+    fn partial_cmp(&self, other: &PagNode) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl<'a> From<&'a LogRecord> for PagNode {
@@ -46,7 +59,7 @@ pub enum TraversalType {
 }
 
 /// An edge in the activity graph
-#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, PartialOrd, Ord)]
+#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq)]
 pub struct PagEdge {
     /// The source node
     pub source: PagNode,
@@ -58,6 +71,18 @@ pub struct PagEdge {
     pub operator_id: Option<OperatorId>,
     /// Edge dependency information
     pub traverse: TraversalType,
+}
+
+impl Ord for PagEdge {
+    fn cmp(&self, other: &PagEdge) -> Ordering {
+        self.source.cmp(&other.source)
+    }
+}
+
+impl PartialOrd for PagEdge {
+    fn partial_cmp(&self, other: &PagEdge) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 // @TODO currently, this creates a new pag per epoch, but never removes the old one.
