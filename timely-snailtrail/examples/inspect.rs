@@ -62,7 +62,7 @@ fn inspector(config: Config) {
             use differential_dataflow::operators::reduce::Count;
             // pag::create_pag(scope, replayers)
                 // replayers.replay_into(scope)
-                make_log_records(scope, replayers)
+                make_log_records(scope, replayers, index)
                 // .inspect(|x| println!("{:?}", x))
                 // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
                 // .inspect(|x| println!("{:?}", x))
@@ -73,7 +73,7 @@ fn inspector(config: Config) {
         });
 
         let mut curr_frontier = vec![];
-        // while probe.less_equal(&Pair::new(0, std::time::Duration::from_nanos(1))) {
+        // while probe.less_equal(&Pair::new(3, std::time::Duration::from_secs(100000000000))) {
         while !probe.done() {
             probe.with_frontier(|f| {
                 let f = f.to_vec();

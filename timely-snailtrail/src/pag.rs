@@ -10,6 +10,7 @@ use itertools::Itertools;
 use differential_dataflow::{collection::AsCollection, operators::join::Join, Collection};
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
+use timely::dataflow::channels::pact::Pipeline;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
@@ -93,7 +94,7 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read>(
     scope: &mut S,
     replayers: Vec<Replayer<R>>,
 ) -> Collection<S, PagEdge, isize> {
-    let records: Collection<_, LogRecord, isize> = make_log_records(scope, replayers);
+    let records: Collection<_, LogRecord, isize> = make_log_records(scope, replayers, 0);
 
     // @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
     // e.g. sched start -> sched end, no interleave, start & end always belong to scheduling,
@@ -124,18 +125,13 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
     fn construct_pag(&self) -> Collection<S, PagEdge, isize> {
         // self.make_data_edges()
         self.make_local_edges()
-            // .concat(&self.make_control_edges())
-            // .concat(&self.make_data_edges())
+            .concat(&self.make_control_edges())
+            .concat(&self.make_data_edges())
     }
 
     fn make_local_edges(&self) -> Collection<S, PagEdge, isize> {
         self.inner
-            .unary_frontier(
-                Exchange::new(|(record, _time, _diff): &(LogRecord, Pair<u64, Duration>, isize)| {
-                    record.local_worker
-                }),
-                "local_edges",
-                |_capability, _info| {
+            .unary_frontier(Pipeline, "local_edges", |_capability, _info| {
                     let mut buffer = Vec::new();
 
                     // stores the last matched record for every epoch & worker_id

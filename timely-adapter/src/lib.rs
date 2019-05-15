@@ -27,6 +27,9 @@ use timely::{
         TimelyEvent::{Messages, Operates, Progress, Schedule},
     },
 };
+use timely::dataflow::operators::inspect::Inspect;
+use timely::dataflow::channels::pact;
+use timely::dataflow::operators::exchange::Exchange;
 
 use differential_dataflow::{
     collection::{AsCollection, Collection},
@@ -34,24 +37,24 @@ use differential_dataflow::{
 };
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
+/// The `LogRecord`s are sorted by timestamp and exchanged so that
+/// SnailTrail peer == computation peer.
 /// Should be called from within a dataflow.
 pub fn make_log_records<S, R>(
     scope: &mut S,
     replayers: Vec<Replayer<R>>,
+    index: usize,
 ) -> Collection<S, LogRecord, isize>
 where
     S: Scope<Timestamp = Pair<u64, Duration>>,
     R: Read + 'static,
 {
-    use timely::dataflow::operators::inspect::Inspect;
     let stream = replayers.replay_into(scope);
     stream
-        // .inspect_time(|t, x| println!("{:?} \t {:?}", t, x))
         .events_to_log_records()
         .as_collection()
         .peel_operators(&stream)
-        // .consolidate() // @TODO: quite a performance hit, perhaps we can avoid this?
-        // .inspect(|x| println!("a {:?}", x))
+        .consolidate() // @TODO: quite a performance hit, perhaps we can avoid this?
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
@@ -96,7 +99,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                         operator_id: Some(event.id as u64),
                                         channel_id: None,
                                     },
-                                    retained.time().clone(),
+                                    Pair::new(retained.time().first, t),
                                     1,
                                 ))
                             }
@@ -130,7 +133,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        retained.time().clone(),
+                                        Pair::new(retained.time().first, t),
                                         1,
                                     ))
                                 }
@@ -167,7 +170,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        retained.time().clone(),
+                                        Pair::new(retained.time().first, t),
                                         1,
                                     ))
                                 }
@@ -205,12 +208,14 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> PeelOperators<S> for Collection<
     ) -> Collection<S, LogRecord, isize> {
         // only operates events, keyed by addr
         let operates = stream
-            .flat_map(|(t, _, x)| {
-                if t.as_nanos() == 1 {
+            .flat_map(|(t, wid, x)| {
+                // according to contract defined in connect.rs, dataflow setup
+                // is collapsed into data-t=0ns and handed at t=(0, 0ns)
+                if t.as_nanos() == 0 {
                     if let Operates(event) = x {
                         Some((
-                            (event.addr, Some(event.id as u64)),
-                            Pair::new(0, Duration::from_nanos(1)),
+                            (event.addr, (wid as u64, Some(event.id as u64))),
+                            Pair::new(0, Default::default()),
                             1,
                         ))
                     } else {
