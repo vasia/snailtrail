@@ -7,11 +7,11 @@ edition = "2018"
 abomonation = "0.7"
 abomonation_derive = "0.3"
 log = "^0.4.0"
-timely = "^0.9"
 itertools = "^0.8"
-differential-dataflow = "^0.9"
 logformat = { version = "0.2.0", path = "../logformat" }
 timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }
+timely = { git = "https://github.com/timelydataflow/timely-dataflow.git" }
+differential-dataflow = { git = "https://github.com/timelydataflow/differential-dataflow.git" }
 
 [dev-dependencies]
 env_logger = "^0.6.1"

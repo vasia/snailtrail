@@ -5,8 +5,9 @@ authors = ["Malte Sandstede <samalt@ethz.ch"]
 edition = "2018"
 
 [dependencies]
-timely = "^0.9"
-differential-dataflow = "^0.9"
+timely = { git = "https://github.com/timelydataflow/timely-dataflow.git" }
+# differential-dataflow = "^0.9"
+differential-dataflow = { git = "https://github.com/timelydataflow/differential-dataflow.git" }
 logformat = { version = "0.2.0", path = "../logformat" }
 log = "^0.4.0"
 
