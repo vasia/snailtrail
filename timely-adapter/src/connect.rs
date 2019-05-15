@@ -275,6 +275,11 @@ unsafe fn log_pag<W: 'static + Write>(
                     index, curr_frontier, total
                 );
 
+                // write out remaining messages
+                if buffer.len() > 0 {
+                    writer.push(Event::Messages(curr_frontier.clone(), buffer.clone()));
+                }
+
                 // free capabilities
                 writer.push(Event::Progress(vec![(curr_frontier.clone(), -1)]));
 
