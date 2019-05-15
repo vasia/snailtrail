@@ -147,10 +147,9 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
                                 .group_by(|(record, _, _)| record.local_worker)
                             {
                                 for (record, t, diff) in group {
-                                    // @TODO: handle unconsolidated inputs gracefully
-                                    assert!(diff == 1);
+                                    assert!(diff == 1, format!("{:?}\t{:?}\t{:?}", record, t, diff));
 
-                                    if let Some(prev) = prev_record.get(&(t.clone(), record.local_worker)) {
+                                    if let Some(prev) = prev_record.get(&(t.first, record.local_worker)) {
                                         // delay to differential epochs: timely capability times and differential times
                                         // don't necessarily match up (e.g., timely might batch more aggressively)
                                         let delayed = cap.delayed(&t);
@@ -160,7 +159,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
                                             t.clone(),
                                             diff,
                                         ));
-                                        prev_record.insert((t, record.local_worker), record);
+                                        prev_record.insert((t.first, record.local_worker), record);
                                     } else {
                                         // the first node of an epoch
                                         trace!(
@@ -169,14 +168,14 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
                                             t.clone(),
                                             record
                                         );
-                                        prev_record.insert((t, record.local_worker), record);
+                                        prev_record.insert((t.first, record.local_worker), record);
                                     }
                                 }
                             }
                         });
 
                         // (optional cleanup since we don't give capabilities to state)
-                        prev_record.retain(|(t, _), _| input.frontier().less_equal(t));
+                        // prev_record.retain(|(t, _), _| input.frontier().less_equal(t));
                     }
                 },
             )
