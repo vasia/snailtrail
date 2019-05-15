@@ -173,6 +173,10 @@ unsafe fn log_pag<W: 'static + Write>(
     // (`Operates` et al.)
     let mut new_frontier = Pair::new(0, Default::default());
 
+    // System time is only allowed to progress once until a
+    // progress message is sent.
+    let mut allow_frontier_update = true;
+
     // initialized to 0, which we'll drop as soon as the
     // computation makes progress
     let mut curr_frontier = Pair::new(0, Default::default());
@@ -193,7 +197,7 @@ unsafe fn log_pag<W: 'static + Write>(
 
     // If a computation's epoch size exceeds `MAX_FUEL`, events are batched
     // into multiple processing times within that epoch.
-    const MAX_FUEL: isize = 512;
+    const MAX_FUEL: usize = 512;
     let mut fuel = MAX_FUEL;
 
     worker
@@ -203,15 +207,23 @@ unsafe fn log_pag<W: 'static + Write>(
                 // println!("time & event, {:?} \t {:?}", time, tuple);
                 match &tuple.2 {
                     Progress(_) | Messages(_) | Schedule(_) => {
-                        fuel -= 1;
+                        if !wrap_up.1 {
+                            fuel -= 1;
+                        }
 
-                        // advance system time
-                        new_frontier.second = tuple.0;
+                        // Advance system time if it hasn't yet been advanced
+                        // for the current progress batch.
+                        if allow_frontier_update {
+                            new_frontier.second = tuple.0;
+                            allow_frontier_update = false;
+                        }
 
                         buffer.push(tuple);
                     }
                     Operates(_) | Channels(_) => {
-                        fuel -= 1;
+                        if !wrap_up.1 {
+                            fuel -= 1;
+                        }
 
                         // all operates events should happen in the initialization epoch,
                         // i.e., before any Text event epoch markers have been observed
@@ -235,39 +247,41 @@ unsafe fn log_pag<W: 'static + Write>(
                     }
                     _ => {}
                 }
-            }
 
-            if buffer.len() > 0 && !wrap_up.1 {
-                trace!("fuel: {}", fuel);
+                if !wrap_up.1 {
+                    // Advance frontier if (a) epoch has advanced or (b) fuel has run out.
+                    // Timestamps strictly increase as event and processing time are related.
+                    if (new_frontier.first > curr_frontier.first) || fuel == 0 {
+                        info!(
+                            "w{} progress {:?} -> {:?} | fuel: {}",
+                            index, curr_frontier, new_frontier, fuel
+                        );
 
-                // Advance frontier if (a) epoch has advanced or (b) fuel has run out.
-                // Timestamps strictly increase as event and processing time are related.
-                if (new_frontier.first > curr_frontier.first) || fuel <= 0 {
-                    fuel = MAX_FUEL;
+                        fuel = MAX_FUEL;
 
-                    info!(
-                        "w{}@ep{:?}: new epoch: {:?}",
-                        index, curr_frontier, new_frontier
-                    );
-                    writer.push(Event::Progress(vec![
-                        (new_frontier.clone(), 1),
-                        (curr_frontier.clone(), -1),
-                    ]));
-                    curr_frontier = new_frontier.clone();
+                        writer.push(Event::Progress(vec![
+                            (new_frontier.clone(), 1),
+                            (curr_frontier.clone(), -1),
+                        ]));
+                        curr_frontier = new_frontier.clone();
+                        allow_frontier_update = true;
+
+                        // flush out remaining elements
+                        if buffer.len() > 0 {
+                            trace!("w{} flush@{:?}: count: {} | total: {}", index, curr_frontier, buffer.len(), total);
+                            total += buffer.len();
+                            writer.push(Event::Messages(curr_frontier.clone(), std::mem::replace(&mut buffer, Vec::new())));
+                        }
+                    }
                 }
-
-                trace!(
-                    "w{} send @epoch{:?}: count: {} | total: {}",
-                    index,
-                    curr_frontier,
-                    buffer.len(),
-                    total
-                );
-
-                total += buffer.len();
-                writer.push(Event::Messages(curr_frontier.clone(), buffer.clone()));
-                buffer.drain(..);
             }
+
+            // @TODO: do I want to write out even if fuel hasn't been depleted?
+            // if buffer.len() > 0 && !wrap_up.1 {
+            //     // trace!(" w{} send @epoch{:?}: count: {} | total: {}", index, curr_frontier, buffer.len(), total); trace!("first buffer element: {:?}", buffer[0]);
+            //     total += buffer.len();
+            //     writer.push(Event::Messages(curr_frontier.clone(), std::mem::replace(&mut buffer, Vec::new())));
+            // }
 
             if wrap_up.0 && !wrap_up.1 {
                 info!(
