@@ -75,6 +75,8 @@ pub fn make_replayers(
     source_peers: usize,
     sockets: Option<Arc<Mutex<Vec<Option<TcpStream>>>>>,
 ) -> Vec<Replayer<ReplayerType>> {
+    assert!(source_peers == worker_peers, "fix exchange after logrecord creation for this to work");
+
     info!(
         "Creating replayers\tworker index: {}, worker peers: {}, source peers: {}, online: {}",
         worker_index,
@@ -150,7 +152,7 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
 /// Registers a `TimelyEvent` logger which outputs relevant log events for PAG construction.
 /// 1. Only relevant events are written to `writer`.
 /// 2. Using `Text` events as markers, logged events are written out at one time per epoch.
-/// 3. Dataflow setup is collapsed into t=1ns so that peel_operators is more efficient.
+/// 3. Dataflow setup is collapsed into t=(0, 0ns) so that peel_operators is more efficient.
 /// 4. If the computation is bounded, capabilities will be dropped correctly at the end of
 ///    computation.
 ///
@@ -169,11 +171,11 @@ unsafe fn log_pag<W: 'static + Write>(
 ) {
     // first real frontier, used for setting up the computation
     // (`Operates` et al.)
-    let mut new_frontier = Pair::new(0, Duration::from_nanos(1));
+    let mut new_frontier = Pair::new(0, Default::default());
 
     // initialized to 0, which we'll drop as soon as the
     // computation makes progress
-    let mut curr_frontier = Pair::new(0, Duration::default());
+    let mut curr_frontier = Pair::new(0, Default::default());
 
     // buffer of relevant events for a batch. As a batch only ever belongs
     // to a single epoch (epoch markers only appear at the beginning of a batch),
@@ -189,7 +191,9 @@ unsafe fn log_pag<W: 'static + Write>(
     let index = worker.index();
     let mut total = 0;
 
-    const MAX_FUEL: usize = 1024;
+    // If a computation's epoch size exceeds `MAX_FUEL`, events are batched
+    // into multiple processing times within that epoch.
+    const MAX_FUEL: isize = 512;
     let mut fuel = MAX_FUEL;
 
     worker
@@ -199,26 +203,34 @@ unsafe fn log_pag<W: 'static + Write>(
                 // println!("time & event, {:?} \t {:?}", time, tuple);
                 match &tuple.2 {
                     Progress(_) | Messages(_) | Schedule(_) => {
-                        new_frontier = Pair::new(new_frontier.first, tuple.0);
+                        fuel -= 1;
+
+                        // advance system time
+                        new_frontier.second = tuple.0;
+
                         buffer.push(tuple);
                     }
                     Operates(_) | Channels(_) => {
+                        fuel -= 1;
+
                         // all operates events should happen in the initialization epoch,
                         // i.e., before any Text event epoch markers have been observed
-                        assert!(new_frontier == Pair::new(0, Duration::from_nanos(1)));
+                        assert!(new_frontier == Pair::new(0, Default::default()));
+                        assert!(new_frontier == curr_frontier);
 
-                        buffer.push((new_frontier.second, tuple.1, tuple.2));
+                        // the tuple is provided to the computation at a 0ns data timestamp,
+                        // and (0, 0ns) time (see below).
+                        buffer.push((curr_frontier.second, tuple.1, tuple.2));
                     }
                     // Text events mark epochs in the computation. They are always the first
                     // in their batch, so a single batch is never split into multiple epochs.
                     Text(e) => {
+                        trace!("text event: {}", e);
                         if e.starts_with("[st] computation done") {
                             wrap_up = (true, false);
                         } else {
-                            // advance frontier at which events are buffered to current time
-                            // Note: this is the tuple's time, not the time at which we currently
-                            // hand out events
-                            new_frontier = Pair::new(new_frontier.first + 1, new_frontier.second);
+                            // advance epoch time
+                            new_frontier.first += 1;
                         }
                     }
                     _ => {}
@@ -226,14 +238,12 @@ unsafe fn log_pag<W: 'static + Write>(
             }
 
             if buffer.len() > 0 && !wrap_up.1 {
-                fuel -= 1;
+                trace!("fuel: {}", fuel);
 
-                // potentially downgrade capability to the new frontier
-                // timestamps strictly increase (event time can only increase, as does processing time)
+                // Advance frontier if (a) epoch has advanced or (b) fuel has run out.
+                // Timestamps strictly increase as event and processing time are related.
                 if (new_frontier.first > curr_frontier.first) || fuel <= 0 {
                     fuel = MAX_FUEL;
-
-                    assert!(new_frontier > curr_frontier);
 
                     info!(
                         "w{}@ep{:?}: new epoch: {:?}",
