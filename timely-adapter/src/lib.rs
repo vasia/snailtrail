@@ -262,51 +262,47 @@ trait ExchangeAndSort<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// once the frontier has advanced past their differential time.
     ///
     /// This operator aims to satisfy (A) and (B) after a `consolidate` call.
-    fn exchange_and_sort(&self) -> Collection<S, LogRecord, isize>;
+    // fn exchange_and_sort(&self) -> Collection<S, LogRecord, isize>;
+    fn exchange_and_sort(&self) -> Collection<S, (Duration, Duration), isize>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ExchangeAndSort<S> for Collection<S, LogRecord, isize> {
-    fn exchange_and_sort(&self) -> Collection<S, LogRecord, isize> {
+    fn exchange_and_sort(&self) -> Collection<S, (Duration, Duration), isize> {
         self
             .inner
+        // changing between these two exchange pacts decides whether batching is correct
+        //    (Pipeline) or overlapping (Exchange) after a preceding consolidate
             .unary_frontier(pact::Exchange::new(|(x, _time, _diff): &(LogRecord, _, _)|
                                                 // (A) exchange to local_worker
                                                 x.local_worker
             ), "exchange_and_sort", |capability, _info| {
-                // keeps track of reordered events
-                let mut state = Vec::new();
-
-                // As inter-batch sorting is necessary, we use the operator's capability
-                // instead of being able to reuse an input capability (they might've advanced
-                // past their associated events' differential timestamp).
-                let mut capability = Some(capability);
-
+            // .unary_frontier(Pipeline, "exchange_and_sort", |capability, _info| {
                 move |input, output| {
-                    input.for_each(|_cap, data| {
-                        state.append(&mut data.replace(Vec::new()));
-                    });
+                    let mut buf2 = Default::default();
+                    let mut buf = Duration::new(1000, 0);
 
-                    // sort the current state by timestamp
-                    state.sort_by_key(|(x, _t, _diff)| x.timestamp);
+                    let mut capie = None;
 
-                    // determine up to what point we can write out
-                    let count = state.iter().filter(|(_x, t, _diff)| !input.frontier().less_equal(t)).count();
+                    // each data is sorted within itself
+                    input.for_each(|cap, data| {
+                        let mut data = data.replace(Vec::new());
 
-                    if count > 0 {
-                        if let Some(capability) = &mut capability {
-                            // If we can write out, we can also downgrade to the oldest event
-                            capability.downgrade(&state[0].1);
-                            let mut session = output.session(&capability);
-                            for record in state.drain(..count) {
-                                session.give(record);
+                        for x in &data {
+                            if (x.0).timestamp > buf2 {
+                                buf2 = (x.0).timestamp.clone();
+                            }
+
+                            if (x.0).timestamp < buf {
+                                buf = (x.0).timestamp.clone();
                             }
                         }
-                    }
 
-                    // If input frontier is empty, our computation is done,
-                    // so we can drop this operator's capability.
-                    if input.frontier.is_empty() {
-                        capability = None;
+                        capie = Some(cap.retain());
+                    });
+
+                    if let Some(capie) = capie {
+                        let mut session = output.session(&capie);
+                        session.give(((buf, buf2), Pair::new(0,Default::default()), 1));
                     }
                 }
             })
