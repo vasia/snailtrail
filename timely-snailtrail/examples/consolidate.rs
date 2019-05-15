@@ -18,35 +18,37 @@ use std::cmp::Ordering;
 #[macro_use]
 extern crate abomonation_derive;
 
-#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone)]
+use logformat::pair::Pair;
+
+#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone, PartialOrd, Ord)]
 struct Dupel {
     first: u64,
     second: u64,
 }
 
-impl Ord for Dupel {
-    fn cmp(&self, other: &Dupel) -> Ordering {
-        if self.first < other.first {
-            Ordering::Less
-        } else if self.first > other.first {
-            Ordering::Greater
-        } else {
-            if self.second < other.second {
-                Ordering::Greater // !
-            } else if self.second > other.second {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
-        }
-    }
-}
+// impl Ord for Dupel {
+//     fn cmp(&self, other: &Dupel) -> Ordering {
+//         if self.first < other.first {
+//             Ordering::Less
+//         } else if self.first > other.first {
+//             Ordering::Greater
+//         } else {
+//             if self.second < other.second {
+//                 Ordering::Greater // !
+//             } else if self.second > other.second {
+//                 Ordering::Less
+//             } else {
+//                 Ordering::Equal
+//             }
+//         }
+//     }
+// }
 
-impl PartialOrd for Dupel {
-    fn partial_cmp(&self, other: &Dupel) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+// impl PartialOrd for Dupel {
+//     fn partial_cmp(&self, other: &Dupel) -> Option<Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
 
 #[test]
 fn comparisons() {
@@ -61,16 +63,26 @@ fn main() {
     timely::execute_from_args(std::env::args(), move |worker| {
         let timer = std::time::Instant::now();
 
+        let index = worker.index();
+
         let (mut blacklist, mut input, probe) = worker.dataflow(|scope| {
             let (blacklist_handle, blacklist) = scope.new_collection();
             let (input_handle, input) = scope.new_collection();
 
             use differential_dataflow::operators::reduce::Count;
+            use timely::dataflow::operators::inspect::Inspect;
+            use differential_dataflow::collection::AsCollection;
 
             let probe = input
                 .antijoin(&blacklist)
                 .map(|x: (u64, u64)| Dupel { first: x.0, second: x.1})
+                .inner
+                .inspect_time(|t, x| { if index == 0 {println!("a {}@{:?} : {:?}", index, t, x); }})
+                .as_collection()
                 .consolidate()
+                .inner
+                .inspect_time(|t, x| { if index == 0 {println!("b {}@{:?} : {:?}", index, t, x); }})
+                .as_collection()
                 .map(|_| 0)
                 .count()
                 .inspect(|x| println!("{:?}", x))
@@ -79,12 +91,12 @@ fn main() {
             (blacklist_handle, input_handle, probe)
         });
 
-        blacklist.advance_to(0);
+        blacklist.advance_to(Pair::new(0,0));
         blacklist.flush();
         blacklist.insert(3);
         drop(blacklist);
 
-        input.advance_to(2);
+        input.advance_to(Pair::new(2, 2));
         input.flush();
         // for i in 1 .. 10_00000 {
         //     input.insert((3, i));
@@ -109,7 +121,7 @@ fn main() {
         // input.advance_to(4);
         // input.flush();
 
-        for i in (12_00000 .. 15_00000).rev() {
+        for i in (12_00000 .. 13_00000).rev() {
             input.insert((4, i));
         }
 
@@ -117,6 +129,9 @@ fn main() {
         // input.flush();
 
         std::thread::sleep_ms(1000);
+
+        input.advance_to(Pair::new(2, 3));
+        input.flush();
 
         for i in (14_00000 .. 15_00000).rev() {
             input.insert((4, i));
@@ -127,11 +142,14 @@ fn main() {
 
         std::thread::sleep_ms(1000);
 
+        input.advance_to(Pair::new(2, 4));
+        input.flush();
+
         for i in (13_00000 .. 14_00000).rev() {
             input.insert((4, i));
         }
 
-        input.advance_to(5);
+        input.advance_to(Pair::new(5, 5));
         input.flush();
         // for i in 0 .. 10 {
         //     input.insert((5, i));
@@ -141,7 +159,7 @@ fn main() {
         // drop(input);
 
         let mut curr_frontier = vec![];
-        while probe.less_equal(&4) {
+        while probe.less_equal(&Pair::new(2, 4)) {
             probe.with_frontier(|f| {
                 let f = f.to_vec();
                 if f != curr_frontier {
