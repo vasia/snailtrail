@@ -253,56 +253,62 @@ trait ExchangeAndSort<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// (A) It exchanges data based on `hashed()`. (B) It reorders by
     /// value and breaks up timely batches at will. This might shuffle
     /// differential times, as they (a) might be reordered within their
-    /// batch and (b) might be grouped in overlapping timely batches,
+    /// batch and (b) might be grouped in overlapping timely batches
+    /// when exchanging again after the consolidate,
     /// e.g. timely 1: differential 5 - 10, timely 2: differential 7 - 15.
     /// Intra-batch order ((a)) can be solved by sorting every timely
-    /// batch by differential timestamp, but inter-batch order ((b))
-    /// might still be off (e.g. `...,7,9,10|8,11,...`) and requires
-    /// sorting across whole batches. Events are only certainly well-ordered
+    /// batch by differential timestamp (e.g. by overwriting Ord traits),
+    /// but inter-batch order ((b)) might still be off (e.g. `...,7,9,10|8,11,...`)
+    /// after an exchange (necessary due to (A)) and requires sorting
+    /// across batches. Events are only certainly well-ordered
     /// once the frontier has advanced past their differential time.
     ///
     /// This operator aims to satisfy (A) and (B) after a `consolidate` call.
-    // fn exchange_and_sort(&self) -> Collection<S, LogRecord, isize>;
-    fn exchange_and_sort(&self) -> Collection<S, (Duration, Duration), isize>;
+    fn exchange_and_sort(&self) -> Collection<S, LogRecord, isize>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ExchangeAndSort<S> for Collection<S, LogRecord, isize> {
-    fn exchange_and_sort(&self) -> Collection<S, (Duration, Duration), isize> {
+    fn exchange_and_sort(&self) -> Collection<S, LogRecord, isize> {
         self
             .inner
-        // changing between these two exchange pacts decides whether batching is correct
-        //    (Pipeline) or overlapping (Exchange) after a preceding consolidate
             .unary_frontier(pact::Exchange::new(|(x, _time, _diff): &(LogRecord, _, _)|
                                                 // (A) exchange to local_worker
                                                 x.local_worker
             ), "exchange_and_sort", |capability, _info| {
-            // .unary_frontier(Pipeline, "exchange_and_sort", |capability, _info| {
+                // keeps track of reordered events
+                let mut state = Vec::new();
+
+                // As inter-batch sorting is necessary, we use the operator's capability
+                // instead of being able to reuse an input capability (they might've advanced
+                // past their associated events' differential timestamp).
+                let mut capability = Some(capability);
+
                 move |input, output| {
-                    let mut buf2 = Default::default();
-                    let mut buf = Duration::new(1000, 0);
-
-                    let mut capie = None;
-
-                    // each data is sorted within itself
-                    input.for_each(|cap, data| {
-                        let mut data = data.replace(Vec::new());
-
-                        for x in &data {
-                            if (x.0).timestamp > buf2 {
-                                buf2 = (x.0).timestamp.clone();
-                            }
-
-                            if (x.0).timestamp < buf {
-                                buf = (x.0).timestamp.clone();
-                            }
-                        }
-
-                        capie = Some(cap.retain());
+                    input.for_each(|_cap, data| {
+                        state.append(&mut data.replace(Vec::new()));
                     });
 
-                    if let Some(capie) = capie {
-                        let mut session = output.session(&capie);
-                        session.give(((buf, buf2), Pair::new(0,Default::default()), 1));
+                    // sort the current state by timestamp
+                    state.sort_by_key(|(x, _t, _diff)| x.timestamp);
+
+                    // determine up to what point we can write out
+                    let count = state.iter().filter(|(_x, t, _diff)| !input.frontier().less_equal(t)).count();
+
+                    if count > 0 {
+                        if let Some(capability) = &mut capability {
+                            // If we can write out, we can also downgrade to the oldest event
+                            capability.downgrade(&state[0].1);
+                            let mut session = output.session(&capability);
+                            for record in state.drain(..count) {
+                                session.give(record);
+                            }
+                        }
+                    }
+
+                    // If input frontier is empty, our computation is done,
+                    // so we can drop this operator's capability.
+                    if input.frontier.is_empty() {
+                        capability = None;
                     }
                 }
             })
