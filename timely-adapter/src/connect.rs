@@ -26,12 +26,17 @@ use timely::{
     worker::Worker,
 };
 
+use differential_dataflow::lattice::Lattice;
+
 use logformat::pair::Pair;
+use std::fmt::Debug;
+
+use abomonation::Abomonation;
 
 use TimelyEvent::{Channels, Messages, Operates, Progress, Schedule, Text};
 
 /// A replayer that reads data to be streamed into timely
-pub type Replayer<R> = EventReader<Pair<u64, Duration>, (Duration, WorkerIdentifier, TimelyEvent), R>;
+pub type Replayer<T, R> = EventReader<T, (Duration, WorkerIdentifier, TimelyEvent), R>;
 
 /// Types of replayer to be created from `make_replayers`
 pub enum ReplayerType {
@@ -69,14 +74,13 @@ pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
 /// Construct replayers that read data from sockets or file and can stream it into
 /// timely dataflow. If `Some(sockets)` is passed, the replayers assume an online setting.
 /// Adapted from TimelyDataflow examples / https://github.com/utaal/timely-viz
-pub fn make_replayers(
+pub fn make_replayers <T>(
     worker_index: usize,
     worker_peers: usize,
     source_peers: usize,
     sockets: Option<Arc<Mutex<Vec<Option<TcpStream>>>>>,
-) -> Vec<Replayer<ReplayerType>> {
-    assert!(source_peers == worker_peers, "fix exchange after logrecord creation for this to work");
-
+) -> Vec<Replayer<T, ReplayerType>>
+where T: Lattice + Ord {
     info!(
         "Creating replayers\tworker index: {}, worker peers: {}, source peers: {}, online: {}",
         worker_index,
@@ -117,7 +121,7 @@ pub fn make_replayers(
 /// Logging of events to TCP or file.
 /// For live analysis, provide `SNAILTRAIL_ADDR` as env variable.
 /// Else, the computation will log to file for later replay.
-pub fn register_logger(worker: &mut Worker<Generic>) {
+pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation> (worker: &mut Worker<Generic>) {
     if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
         if let Ok(stream) = TcpStream::connect(&addr) {
             // SnailTrail should be able to keep up with an online computation.
@@ -127,7 +131,7 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
                 .set_nonblocking(true)
                 .expect("set_nonblocking call failed");
 
-            let writer = EventWriter::new(stream);
+            let writer: EventWriter<T, _, _> = EventWriter::new(stream);
             unsafe { log_pag(worker, writer); }
         } else {
             panic!("Could not connect logging stream to: {:?}", addr);
@@ -139,9 +143,49 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
             Err(why) => panic!("couldn't create {}: {}", path.display(), why.description()),
             Ok(file) => file,
         };
-        let writer = EventWriter::new(file);
+        let writer: EventWriter<T, _, _> = EventWriter::new(file);
         unsafe { log_pag(worker, writer); }
     }
+}
+
+/// Wrapper for timestamps that defines how they progress system and epoch time
+pub trait NextEpoch {
+    /// advance epoch
+    fn tick_epoch(&mut self, tuple_time: &Duration);
+    /// advance system time
+    fn tick_sys(&mut self, tuple_time: &Duration);
+}
+
+impl NextEpoch for Duration {
+    fn tick_epoch(&mut self, tuple_time: &Duration) {
+        *self = *tuple_time;
+    }
+
+    fn tick_sys(&mut self, tuple_time: &Duration) {
+        *self = *tuple_time;
+    }
+}
+
+impl NextEpoch for Pair<u64, Duration> {
+    fn tick_epoch(&mut self, tuple_time: &Duration) {
+        self.first += 1;
+    }
+
+    fn tick_sys(&mut self, tuple_time: &Duration) {
+        self.second = *tuple_time;
+    }
+}
+
+/// Status of logged computation. Changed by log message
+/// `[st] computation done`.
+enum ComputationStatus {
+    /// Computation is ongoing
+    Ongoing,
+    /// marker that computation has ended
+    WrappingUp,
+    /// apabilities have been dropped; no further messages
+    /// should get sent.
+    WrappedUp
 }
 
 // @TODO: further describe contract between log_pag and SnailTrail; mark as unsafe
@@ -165,141 +209,143 @@ pub fn register_logger(worker: &mut Worker<Generic>) {
 /// 3. (optional) After the last round, the end of the computation should be logged:
 ///    `"[st] computation done"`
 /// Failing to do so might have unexpected effects on the PAG creation.
-unsafe fn log_pag<W: 'static + Write>(
+unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation>(
     worker: &mut Worker<Generic>,
-    mut writer: EventWriter<Pair<u64, Duration>, (Duration, usize, TimelyEvent), W>,
+    mut writer: EventWriter<T, (Duration, usize, TimelyEvent), W>,
 ) {
+    // initialized to default, dropped as soon as the
+    // computation starts running.
+    let mut curr_cap: T = Default::default();
+
     // first real frontier, used for setting up the computation
-    // (`Operates` et al.)
-    let mut new_frontier = Pair::new(0, Default::default());
-
-    // System time is only allowed to progress once until a
-    // progress message is sent.
-    let mut allow_frontier_update = true;
-
-    // initialized to 0, which we'll drop as soon as the
-    // computation makes progress
-    let mut curr_frontier = Pair::new(0, Default::default());
+    // (`Operates` et al.).
+    let mut next_cap: T = Default::default();
 
     // buffer of relevant events for a batch. As a batch only ever belongs
     // to a single epoch (epoch markers only appear at the beginning of a batch),
     // we don't have to keep track of times for batch elements.
     let mut buffer = Vec::new();
 
-    // 1st: marker that computation has ended
-    // 2nd: capabilities have been dropped; no further messages
-    //      should get sent.
-    let mut wrap_up = (false, false);
+    let mut status = ComputationStatus::Ongoing;
 
-    // debug logs
-    let index = worker.index();
-    let mut total = 0;
+    // System time is only allowed to progress once until a
+    // progress message is sent.
+    let mut tick_sys = true;
 
     // If a computation's epoch size exceeds `MAX_FUEL`, events are batched
     // into multiple processing times within that epoch.
     const MAX_FUEL: usize = 512;
     let mut fuel = MAX_FUEL;
 
+    let worker_index = worker.index();
+
     worker
         .log_register()
         .insert::<TimelyEvent, _>("timely", move |time, data| {
-            for tuple in data.drain(..) {
-                // println!("time & event, {:?} \t {:?}", time, tuple);
-                match &tuple.2 {
-                    Progress(_) | Messages(_) | Schedule(_) => {
-                        if !wrap_up.1 {
-                            fuel -= 1;
+            match status {
+                ComputationStatus::Ongoing => {
+                    for tuple in data.drain(..) {
+                        match &tuple.2 {
+                            Text(e) => {
+                                info!("w{}@{:?} text event: {}", worker_index, curr_cap, e);
+
+                                if e.starts_with("[st] computation done") {
+                                    status = ComputationStatus::WrappingUp;
+                                }
+
+                                // Text events mark ends of epochs in the computation.
+                                next_cap.tick_epoch(&tuple.0);
+
+                                buffer.push(tuple);
+
+                                flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
+                                             &mut writer,
+                                             &mut curr_cap,
+                                             worker_index);
+                                fuel = MAX_FUEL;
+                                tick_sys = true;
+
+                            }
+                            Operates(_) | Channels(_) => {
+                                // all operates events should happen in the initialization epoch,
+                                // i.e., before any Text event epoch markers have been observed
+                                assert!(next_cap == curr_cap && curr_cap == Default::default());
+
+                                fuel -= 1;
+
+                                buffer.push((Default::default(), tuple.1, tuple.2));
+                            }
+                            Progress(_) | Messages(_) | Schedule(_) => {
+                                fuel -= 1;
+
+                                // Advance system time if it hasn't yet been advanced
+                                // for the current progress batch.
+                                if tick_sys {
+                                    next_cap.tick_sys(&tuple.0);
+                                    tick_sys = false;
+
+                                    advance_cap(&mut writer, &mut next_cap, &mut curr_cap, worker_index);
+                                }
+
+                                buffer.push(tuple);
+                            }
+                            _ => {}
                         }
 
-                        // Advance system time if it hasn't yet been advanced
-                        // for the current progress batch.
-                        if allow_frontier_update {
-                            new_frontier.second = tuple.0;
-                            allow_frontier_update = false;
-                        }
-
-                        buffer.push(tuple);
-                    }
-                    Operates(_) | Channels(_) => {
-                        if !wrap_up.1 {
-                            fuel -= 1;
-                        }
-
-                        // all operates events should happen in the initialization epoch,
-                        // i.e., before any Text event epoch markers have been observed
-                        assert!(new_frontier == Pair::new(0, Default::default()));
-                        assert!(new_frontier == curr_frontier);
-
-                        // the tuple is provided to the computation at a 0ns data timestamp,
-                        // and (0, 0ns) time (see below).
-                        buffer.push((curr_frontier.second, tuple.1, tuple.2));
-                    }
-                    // Text events mark epochs in the computation. They are always the first
-                    // in their batch, so a single batch is never split into multiple epochs.
-                    Text(e) => {
-                        trace!("text event: {}", e);
-                        if e.starts_with("[st] computation done") {
-                            wrap_up = (true, false);
-                        } else {
-                            // advance epoch time
-                            new_frontier.first += 1;
-                        }
-                    }
-                    _ => {}
-                }
-
-                if !wrap_up.1 {
-                    // Advance frontier if (a) epoch has advanced or (b) fuel has run out.
-                    // Timestamps strictly increase as event and processing time are related.
-                    if (new_frontier.first > curr_frontier.first) || fuel == 0 {
-                        info!(
-                            "w{} progress {:?} -> {:?} | fuel: {}",
-                            index, curr_frontier, new_frontier, fuel
-                        );
-
-                        fuel = MAX_FUEL;
-
-                        writer.push(Event::Progress(vec![
-                            (new_frontier.clone(), 1),
-                            (curr_frontier.clone(), -1),
-                        ]));
-                        curr_frontier = new_frontier.clone();
-                        allow_frontier_update = true;
-
-                        // flush out remaining elements
-                        if buffer.len() > 0 {
-                            trace!("w{} flush@{:?}: count: {} | total: {}", index, curr_frontier, buffer.len(), total);
-                            total += buffer.len();
-                            writer.push(Event::Messages(curr_frontier.clone(), std::mem::replace(&mut buffer, Vec::new())));
+                        if fuel == 0 {
+                            flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
+                                         &mut writer,
+                                         &mut curr_cap,
+                                         worker_index);
+                            fuel = MAX_FUEL;
+                            tick_sys = true;
                         }
                     }
                 }
-            }
+                ComputationStatus::WrappingUp => {
+                    info!("w{}@ep{:?}: timely logging wrapping up", worker_index, curr_cap);
+                    assert!(buffer.len() == 0, "flush buffer before wrap up!");
 
-            // @TODO: do I want to write out even if fuel hasn't been depleted?
-            // if buffer.len() > 0 && !wrap_up.1 {
-            //     // trace!(" w{} send @epoch{:?}: count: {} | total: {}", index, curr_frontier, buffer.len(), total); trace!("first buffer element: {:?}", buffer[0]);
-            //     total += buffer.len();
-            //     writer.push(Event::Messages(curr_frontier.clone(), std::mem::replace(&mut buffer, Vec::new())));
-            // }
+                    // free capability
+                    writer.push(Event::Progress(vec![(curr_cap.clone(), -1)]));
 
-            if wrap_up.0 && !wrap_up.1 {
-                info!(
-                    "w{}@ep{:?}: timely logging wrapping up | total: {}",
-                    index, curr_frontier, total
-                );
-
-                // write out remaining messages
-                if buffer.len() > 0 {
-                    writer.push(Event::Messages(curr_frontier.clone(), buffer.clone()));
+                    status = ComputationStatus::WrappedUp;
                 }
-
-                // free capabilities
-                writer.push(Event::Progress(vec![(curr_frontier.clone(), -1)]));
-
-                // 1st to false so that marker isn't processed multiple times.
-                // 2nd to true so that no further `Event::Messages` will be sent.
-                wrap_up = (false, true);
-            }
+                ComputationStatus::WrappedUp => {}
+            };
         });
+}
+
+/// Flushes the buffer The buffer is written out at `curr_cap`.
+fn flush_buffer<W, T>(buffer: Vec<(Duration, usize, TimelyEvent)>,
+                      writer: &mut EventWriter<T, (Duration, usize, TimelyEvent), W>,
+                      curr_cap: &mut T,
+                      index: usize)
+where
+    W: 'static + Write,
+    T: Abomonation + Clone + Debug {
+
+    if buffer.len() > 0 {
+        info!("w{} flush@{:?}: count: {}", index, curr_cap, buffer.len());
+        writer.push(Event::Messages(curr_cap.clone(), buffer));
+    }
+}
+
+/// Sends progress information for SnailTrail. The capability is
+/// downgraded to `next_cap`, allowing the frontier to advance.
+fn advance_cap<W, T>(writer: &mut EventWriter<T, (Duration, usize, TimelyEvent), W>,
+                      next_cap: &mut T,
+                      curr_cap: &mut T,
+                      index: usize)
+where
+    W: 'static + Write,
+    T: Abomonation + Clone + Debug {
+
+    info!("w{} progresses from {:?} to {:?}", index, curr_cap, next_cap);
+    writer.push(Event::Progress(vec![
+        (next_cap.clone(), 1),
+        (curr_cap.clone(), -1),
+    ]));
+
+    *curr_cap = next_cap.clone();
 }
