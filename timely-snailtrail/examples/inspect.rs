@@ -8,10 +8,15 @@ use timely::dataflow::{
     operators::{capture::replay::Replay, probe::Probe},
     ProbeHandle,
 };
+use timely::dataflow::Scope;
+
+use std::time::Duration;
 
 use logformat::pair::Pair;
 
 fn main() {
+    env_logger::init();
+
     let workers = std::env::args().nth(1).unwrap().parse::<String>().unwrap();
     let source_peers = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
     let from_file = if let Some(_) = std::env::args().nth(3) {
@@ -51,7 +56,7 @@ fn inspector(config: Config) {
             config.source_peers,
             sockets.clone(),
         );
-        let probe = worker.dataflow(|scope| {
+        let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
             // current dataset (overall times, adding steps in):
             // 2w, debug
             // read_in: ~2500ms
@@ -60,9 +65,12 @@ fn inspector(config: Config) {
             // pag local edges: ~9400ms
             // pag control edges: ~9400ms
             use differential_dataflow::operators::reduce::Count;
-            // pag::create_pag(scope, replayers)
+            use timely::dataflow::operators::inspect::Inspect;
+
+            pag::create_pag(scope, replayers, index)
                 // replayers.replay_into(scope)
-                make_log_records(scope, replayers, index)
+                // .inspect_time(move |t, x| println!("{}\t{:?}\t{:?}", index, t, x))
+                // make_log_records(scope, replayers, index)
                 // .inspect(|x| println!("{:?}", x))
                 // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
                 // .inspect(|x| println!("{:?}", x))

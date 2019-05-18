@@ -5,9 +5,6 @@
 
 #[macro_use]
 extern crate log;
-extern crate differential_dataflow;
-extern crate graph_map;
-extern crate timely;
 
 use differential_dataflow::input::Input;
 use graph_map::GraphMMap;
@@ -19,6 +16,9 @@ use timely_adapter::connect::register_logger;
 use dogsdogsdogs::ProposeExtensionMethod;
 use dogsdogsdogs::{altneu::AltNeu, CollectionIndex};
 
+use std::time::Duration;
+use logformat::pair::Pair;
+
 fn main() {
     env_logger::init();
 
@@ -28,7 +28,7 @@ fn main() {
     let inspect = std::env::args().any(|x| x == "inspect");
 
     timely::execute_from_args(std::env::args().skip(2), move |worker| {
-        register_logger(worker);
+        register_logger::<Pair<u64, Duration>>(worker);
 
         let timer = std::time::Instant::now();
         let graph = GraphMMap::new(&filename);

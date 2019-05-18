@@ -20,11 +20,14 @@ use timely::worker::Worker;
 
 use timely_adapter::connect::register_logger;
 
+use logformat::pair::Pair;
+use std::time::Duration;
+
 fn main() {
     env_logger::init();
 
     timely::execute_from_args(std::env::args(), |worker| {
-        register_logger(worker);
+        register_logger::<Pair<u64, Duration>>(worker);
         let timer = std::time::Instant::now();
 
         let index = worker.index();
@@ -73,8 +76,8 @@ fn main() {
                 .probe()
         });
 
-        let batch = 10;
-        let rounds = 5;
+        let batch = 5;
+        let rounds = 2;
         // let batch = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
         // let rounds = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
 

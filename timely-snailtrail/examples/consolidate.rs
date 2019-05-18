@@ -18,8 +18,6 @@ use std::cmp::Ordering;
 #[macro_use]
 extern crate abomonation_derive;
 
-use logformat::pair::Pair;
-
 #[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone, PartialOrd, Ord)]
 struct Dupel {
     first: u64,
