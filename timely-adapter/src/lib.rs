@@ -10,8 +10,8 @@ extern crate log;
 pub mod connect;
 use crate::connect::Replayer;
 
-use logformat::pair::Pair;
 use logformat::{ActivityType, EventType, LogRecord};
+use logformat::pair::Pair;
 
 use std::io::Read;
 use std::time::Duration;
@@ -30,6 +30,7 @@ use timely::{
 use timely::dataflow::operators::inspect::Inspect;
 use timely::dataflow::channels::pact;
 use timely::dataflow::operators::exchange::Exchange;
+use timely::logging::TimelyEvent::Text;
 
 use differential_dataflow::{
     collection::{AsCollection, Collection},
@@ -37,6 +38,7 @@ use differential_dataflow::{
 };
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
+use differential_dataflow::lattice::Lattice;
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
 /// The `LogRecord`s are sorted by timestamp and exchanged so that
@@ -44,40 +46,58 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 /// Should be called from within a dataflow.
 pub fn make_log_records<S, R>(
     scope: &mut S,
-    replayers: Vec<Replayer<R>>,
+    replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
 ) -> Collection<S, LogRecord, isize>
 where
     S: Scope<Timestamp = Pair<u64, Duration>>,
+    S::Timestamp: Lattice + Ord,
     R: Read + 'static,
 {
     let stream = replayers.replay_into(scope);
 
+    let log_records = stream
+        .events_to_log_records(index)
+        .as_collection()
+        .peel_operators(&stream);
+
     // arrange_core + as_collection is the same as consolidate,
     // but allows to specify the exchange contract used. We
     // don't want records to be shuffled around -> Pipeline.
-    stream
-        .events_to_log_records()
-        .as_collection()
-        .peel_operators(&stream)
-        .arrange_core::<_, OrdValSpine<_, _, _, _>>(Pipeline, "PipelinedConsolidate")
-        .as_collection(|d, _| d.clone())
+    log_records
+
+        // .consolidate()
+        // .inner
+        // .exchange(|x| (x.0).local_worker)
+        // .inspect_time(move |t, x| if index == 0 { println!("{:?}", x);})
+        // .as_collection()
+
+        // .arrange_core::<_, OrdValSpine<_, _, _, _>>(Pipeline, "PipelinedConsolidate")
+        // .as_collection(|d, _| d.clone())
+        // .inspect(|x| println!("{:?}", x))
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
-trait EventsToLogRecords<S: Scope<Timestamp = Pair<u64, Duration>>> {
+trait EventsToLogRecords<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
     /// Converts a Stream of TimelyEvents to their LogRecord representation
-    fn events_to_log_records(&self) -> Stream<S, (LogRecord, Pair<u64, Duration>, isize)>;
+    fn events_to_log_records(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
     for Stream<S, (Duration, usize, TimelyEvent)>
+    where S::Timestamp: Lattice + Ord
 {
-    fn events_to_log_records(&self) -> Stream<S, (LogRecord, Pair<u64, Duration>, isize)> {
+    fn events_to_log_records(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
         self.unary_frontier(Pipeline, "EpochalFlatMap", |_capability, _info| {
             // This only works since we're sure that each worker replays a consistent
             // worker log. In other cases, we'd need to implement a smarter stateful operator.
-            let mut vector = Vec::new();
+            let mut vector: Vec<(Duration, _, _)> = Vec::new();
+
+            // holds an epoch for every source_peer this worker maintains
+            let mut epoch = Vec::new();
+
+            // holds a continually increasing seq_no for every source_peer this worker maintains
+            let mut seq_no: Vec<u64> = Vec::new();
 
             move |input, output| {
                 input.for_each(|cap, data| {
@@ -87,6 +107,12 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                     data.swap(&mut vector);
                     for (t, wid, x) in vector.drain(..) {
                         let record = match x {
+                            // epoch advance
+                            Text(event) => {
+                                get_or_fill(&mut epoch, wid);
+                                epoch[wid] += 1;
+                                None
+                            },
                             // Scheduling & Processing
                             Schedule(event) => {
                                 let event_type = if event.start_stop == StartStop::Start {
@@ -95,8 +121,13 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                     EventType::End
                                 };
 
+                                get_or_fill(&mut seq_no, wid);
+                                seq_no[wid] += 1;
+
                                 Some((
                                     LogRecord {
+                                        seq_no: seq_no[wid] - 1,
+                                        epoch: get_or_fill(&mut epoch, wid),
                                         timestamp: t,
                                         local_worker: wid as u64,
                                         activity_type: ActivityType::Scheduling,
@@ -106,7 +137,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                         operator_id: Some(event.id as u64),
                                         channel_id: None,
                                     },
-                                    Pair::new(retained.time().first, t),
+                                    retained.time().clone(),
                                     1,
                                 ))
                             }
@@ -129,8 +160,13 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                         EventType::Received
                                     };
 
+                                    get_or_fill(&mut seq_no, wid);
+                                    seq_no[wid] += 1;
+
                                     Some((
                                         LogRecord {
+                                            seq_no: seq_no[wid] - 1,
+                                            epoch: get_or_fill(&mut epoch, wid),
                                             timestamp: t,
                                             local_worker: wid as u64,
                                             activity_type: ActivityType::DataMessage,
@@ -140,7 +176,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        Pair::new(retained.time().first, t),
+                                        retained.time().clone(),
                                         1,
                                     ))
                                 }
@@ -166,8 +202,13 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                         Some(event.source as u64)
                                     };
 
+                                    get_or_fill(&mut seq_no, wid);
+                                    seq_no[wid] += 1;
+
                                     Some((
                                         LogRecord {
+                                            seq_no: seq_no[wid] - 1,
+                                            epoch: get_or_fill(&mut epoch, wid),
                                             timestamp: t,
                                             local_worker: wid as u64,
                                             activity_type: ActivityType::ControlMessage,
@@ -177,7 +218,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                             operator_id: None,
                                             channel_id: Some(event.channel as u64),
                                         },
-                                        Pair::new(retained.time().first, t),
+                                        retained.time().clone(),
                                         1,
                                     ))
                                 }
@@ -193,6 +234,18 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                 });
             }
         })
+    }
+}
+
+fn get_or_fill<T: Default + Copy + Clone>(v: &mut Vec<T>, index: usize) -> T {
+    if let Some(x) = v.get(index) {
+        *x
+    } else {
+        for _ in v.len() .. index + 1  {
+            v.push(Default::default());
+        }
+
+        v[index]
     }
 }
 
