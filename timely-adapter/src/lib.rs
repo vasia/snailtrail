@@ -250,7 +250,7 @@ fn get_or_fill<T: Default + Copy + Clone>(v: &mut Vec<T>, index: usize) -> T {
 }
 
 /// Strips a `Collection` of `LogRecord`s from encompassing operators.
-trait PeelOperators<S: Scope<Timestamp = Pair<u64, Duration>>> {
+trait PeelOperators<S: Scope> where S::Timestamp: Lattice + Ord {
     /// Returns a stream of LogRecords where records that describe
     /// encompassing operators have been stripped off
     /// (e.g. the dataflow operator for every direct child,
@@ -261,28 +261,32 @@ trait PeelOperators<S: Scope<Timestamp = Pair<u64, Duration>>> {
     ) -> Collection<S, LogRecord, isize>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> PeelOperators<S> for Collection<S, LogRecord, isize> {
+impl<S: Scope> PeelOperators<S> for Collection<S, LogRecord, isize>
+where S::Timestamp: Lattice + Ord {
     fn peel_operators(
         &self,
         stream: &Stream<S, (Duration, usize, TimelyEvent)>,
     ) -> Collection<S, LogRecord, isize> {
         // only operates events, keyed by addr
         let operates = stream
-            .flat_map(|(t, wid, x)| {
-                // according to contract defined in connect.rs, dataflow setup
-                // is collapsed into data-t=0ns and handed at t=(0, 0ns)
-                if t.as_nanos() == 0 {
-                    if let Operates(event) = x {
-                        Some((
-                            (event.addr, (wid as u64, Some(event.id as u64))),
-                            Pair::new(0, Default::default()),
-                            1,
-                        ))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
+            .unary_frontier(Pipeline, "operates_filter", |_capability, _info| {
+                let mut buffer = Vec::new();
+
+                move |input, output| {
+                    input.for_each(|cap, data| {
+                        let mut session = output.session(&cap);
+
+                        data.swap(&mut buffer);
+                        for (t, wid, x) in buffer.drain(..) {
+                            // according to contract defined in connect.rs, dataflow setup
+                            // is collapsed into data-t=1ns
+                            if t.as_nanos() == 0 {
+                                if let Operates(event) = x {
+                                    session.give(((event.addr, (wid as u64, Some(event.id as u64))), cap.time().clone(), 1));
+                                }
+                            }
+                        }
+                    })
                 }
             })
             .as_collection();
@@ -292,7 +296,10 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> PeelOperators<S> for Collection<
             addr
         });
 
-        let peel_ids = operates.semijoin(&peel_addrs).map(|(_, (wid, id))| (wid, id)).distinct();
+        let peel_ids = operates
+            .semijoin(&peel_addrs)
+            .map(|(_, (wid, id))| (wid, id))
+            .distinct();
 
         self.map(|x| ((x.local_worker, x.operator_id), x))
             .antijoin(&peel_ids)
