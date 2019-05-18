@@ -228,6 +228,13 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
 
                         if let Some(record) = record {
                             let mut session = output.session(&retained);
+
+                            // retract every log record at next epoch
+                            let mut retract = record.clone();
+                            retract.1.first += 1;
+                            retract.2 = -1;
+                            session.give(retract);
+
                             session.give(record);
                         }
                     }
