@@ -10,8 +10,10 @@ timely = { git = "https://github.com/timelydataflow/timely-dataflow.git" }
 differential-dataflow = { git = "https://github.com/timelydataflow/differential-dataflow.git" }
 logformat = { version = "0.2.0", path = "../logformat" }
 log = "^0.4.0"
+abomonation = "0.7"
+abomonation_derive = "0.3"
 
 [dev-dependencies]
 env_logger = "^0.6.1"
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git"}
-dogsdogsdogs = { path = "../../differential-dataflow/dogsdogsdogs" }
+dogsdogsdogs = { path = "/Users/malte/Dev/eth/differential-dataflow/dogsdogsdogs" }
