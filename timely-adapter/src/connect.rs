@@ -36,7 +36,7 @@ use abomonation::Abomonation;
 use TimelyEvent::{Channels, Messages, Operates, Progress, Schedule, Text};
 
 /// A replayer that reads data to be streamed into timely
-pub type Replayer<T, R> = EventReader<T, (Duration, WorkerIdentifier, TimelyEvent), R>;
+pub type Replayer<T, R> = EventReader<T, (u64, (Duration, WorkerIdentifier, TimelyEvent)), R>;
 
 /// Types of replayer to be created from `make_replayers`
 pub enum ReplayerType {
@@ -154,6 +154,8 @@ pub trait NextEpoch {
     fn tick_epoch(&mut self, tuple_time: &Duration);
     /// advance system time
     fn tick_sys(&mut self, tuple_time: &Duration);
+    /// get epoch part of time
+    fn get_epoch(&self) -> u64;
 }
 
 impl NextEpoch for Duration {
@@ -164,6 +166,10 @@ impl NextEpoch for Duration {
     fn tick_sys(&mut self, tuple_time: &Duration) {
         *self = *tuple_time;
     }
+
+    fn get_epoch(&self) -> u64 {
+        panic!("get epoch not possible for Duration");
+    }
 }
 
 impl NextEpoch for Pair<u64, Duration> {
@@ -173,6 +179,10 @@ impl NextEpoch for Pair<u64, Duration> {
 
     fn tick_sys(&mut self, tuple_time: &Duration) {
         self.second = *tuple_time;
+    }
+
+    fn get_epoch(&self) -> u64 {
+        self.first
     }
 }
 
@@ -211,7 +221,7 @@ enum ComputationStatus {
 /// Failing to do so might have unexpected effects on the PAG creation.
 unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation>(
     worker: &mut Worker<Generic>,
-    mut writer: EventWriter<T, (Duration, usize, TimelyEvent), W>,
+    mut writer: EventWriter<T, (u64, (Duration, usize, TimelyEvent)), W>,
 ) {
     // initialized to default, dropped as soon as the
     // computation starts running.
@@ -244,7 +254,7 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
         .insert::<TimelyEvent, _>("timely", move |time, data| {
             match status {
                 ComputationStatus::Ongoing => {
-                    for tuple in data.drain(..) {
+                    for mut tuple in data.drain(..) {
                         match &tuple.2 {
                             Text(e) => {
                                 info!("w{}@{:?} text event: {}", worker_index, curr_cap, e);
@@ -255,8 +265,6 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
 
                                 // Text events mark ends of epochs in the computation.
                                 next_cap.tick_epoch(&tuple.0);
-
-                                buffer.push(tuple);
 
                                 flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
                                              &mut writer,
@@ -273,7 +281,7 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
 
                                 fuel -= 1;
 
-                                buffer.push((Default::default(), tuple.1, tuple.2));
+                                buffer.push((curr_cap.get_epoch(),(Default::default(), tuple.1, tuple.2)));
                             }
                             Progress(_) | Messages(_) | Schedule(_) => {
                                 fuel -= 1;
@@ -287,7 +295,7 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
                                     advance_cap(&mut writer, &mut next_cap, &mut curr_cap, worker_index);
                                 }
 
-                                buffer.push(tuple);
+                                buffer.push((curr_cap.get_epoch(), tuple));
                             }
                             _ => {}
                         }
@@ -317,8 +325,8 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
 }
 
 /// Flushes the buffer The buffer is written out at `curr_cap`.
-fn flush_buffer<W, T>(buffer: Vec<(Duration, usize, TimelyEvent)>,
-                      writer: &mut EventWriter<T, (Duration, usize, TimelyEvent), W>,
+fn flush_buffer<W, T>(buffer: Vec<(u64, (Duration, usize, TimelyEvent))>,
+                      writer: &mut EventWriter<T, (u64, (Duration, usize, TimelyEvent)), W>,
                       curr_cap: &mut T,
                       index: usize)
 where
@@ -333,7 +341,7 @@ where
 
 /// Sends progress information for SnailTrail. The capability is
 /// downgraded to `next_cap`, allowing the frontier to advance.
-fn advance_cap<W, T>(writer: &mut EventWriter<T, (Duration, usize, TimelyEvent), W>,
+fn advance_cap<W, T>(writer: &mut EventWriter<T, (u64, (Duration, usize, TimelyEvent)), W>,
                       next_cap: &mut T,
                       curr_cap: &mut T,
                       index: usize)

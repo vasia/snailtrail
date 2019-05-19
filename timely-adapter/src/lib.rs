@@ -84,17 +84,14 @@ trait EventsToLogRecords<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Tim
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
-    for Stream<S, (Duration, usize, TimelyEvent)>
+    for Stream<S, (u64, (Duration, usize, TimelyEvent))>
     where S::Timestamp: Lattice + Ord
 {
     fn events_to_log_records(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
         self.unary_frontier(Pipeline, "EpochalFlatMap", |_capability, _info| {
             // This only works since we're sure that each worker replays a consistent
             // worker log. In other cases, we'd need to implement a smarter stateful operator.
-            let mut vector: Vec<(Duration, _, _)> = Vec::new();
-
-            // holds an epoch for every source_peer this worker maintains
-            let mut epoch = Vec::new();
+            let mut vector = Vec::new();
 
             // holds a continually increasing seq_no for every source_peer this worker maintains
             let mut seq_no: Vec<u64> = Vec::new();
@@ -105,14 +102,8 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                     let retained = cap.retain();
 
                     data.swap(&mut vector);
-                    for (t, wid, x) in vector.drain(..) {
+                    for (epoch, (t, wid, x)) in vector.drain(..) {
                         let record = match x {
-                            // epoch advance
-                            Text(event) => {
-                                get_or_fill(&mut epoch, wid);
-                                epoch[wid] += 1;
-                                None
-                            },
                             // Scheduling & Processing
                             Schedule(event) => {
                                 let event_type = if event.start_stop == StartStop::Start {
@@ -127,7 +118,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                 Some((
                                     LogRecord {
                                         seq_no: seq_no[wid] - 1,
-                                        epoch: get_or_fill(&mut epoch, wid),
+                                        epoch,
                                         timestamp: t,
                                         local_worker: wid as u64,
                                         activity_type: ActivityType::Scheduling,
@@ -166,7 +157,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                     Some((
                                         LogRecord {
                                             seq_no: seq_no[wid] - 1,
-                                            epoch: get_or_fill(&mut epoch, wid),
+                                            epoch,
                                             timestamp: t,
                                             local_worker: wid as u64,
                                             activity_type: ActivityType::DataMessage,
@@ -208,7 +199,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
                                     Some((
                                         LogRecord {
                                             seq_no: seq_no[wid] - 1,
-                                            epoch: get_or_fill(&mut epoch, wid),
+                                            epoch,
                                             timestamp: t,
                                             local_worker: wid as u64,
                                             activity_type: ActivityType::ControlMessage,
@@ -264,7 +255,7 @@ trait PeelOperators<S: Scope> where S::Timestamp: Lattice + Ord {
     /// the surrounding iterate operators for loops)
     fn peel_operators(
         &self,
-        stream: &Stream<S, (Duration, usize, TimelyEvent)>,
+        stream: &Stream<S, (u64, (Duration, usize, TimelyEvent))>,
     ) -> Collection<S, LogRecord, isize>;
 }
 
@@ -272,7 +263,7 @@ impl<S: Scope> PeelOperators<S> for Collection<S, LogRecord, isize>
 where S::Timestamp: Lattice + Ord {
     fn peel_operators(
         &self,
-        stream: &Stream<S, (Duration, usize, TimelyEvent)>,
+        stream: &Stream<S, (u64, (Duration, usize, TimelyEvent))>,
     ) -> Collection<S, LogRecord, isize> {
         // only operates events, keyed by addr
         let operates = stream
@@ -284,7 +275,7 @@ where S::Timestamp: Lattice + Ord {
                         let mut session = output.session(&cap);
 
                         data.swap(&mut buffer);
-                        for (t, wid, x) in buffer.drain(..) {
+                        for (_, (t, wid, x)) in buffer.drain(..) {
                             // according to contract defined in connect.rs, dataflow setup
                             // is collapsed into data-t=1ns
                             if t.as_nanos() == 0 {
