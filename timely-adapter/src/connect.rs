@@ -67,10 +67,11 @@ impl Read for ReplayerType {
 /// computations we're examining (one socket for every worker on the
 /// examined computation).
 /// Adapted from TimelyDataflow examples / https://github.com/utaal/timely-viz
-pub fn open_sockets(source_peers: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
+pub fn open_sockets(count: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
+    assert!(count > 0);
     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     Arc::new(Mutex::new(
-        (0..source_peers)
+        (0..count)
             .map(|_| Some(listener.incoming().next().unwrap().unwrap()))
             .collect::<Vec<_>>(),
     ))
@@ -129,30 +130,38 @@ where T: Lattice + Ord {
 /// Logging of events to TCP or file.
 /// For live analysis, provide `SNAILTRAIL_ADDR` as env variable.
 /// Else, the computation will log to file for later replay.
-pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation> (worker: &mut Worker<Generic>) {
-    if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
-        if let Ok(stream) = TcpStream::connect(&addr) {
-            // SnailTrail should be able to keep up with an online computation.
-            // If batch sizes are too large, they should be buffered. Blocking the
-            // TCP connection is not an option as it slows down the main computation.
-            stream
-                .set_nonblocking(true)
-                .expect("set_nonblocking call failed");
+pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation> (worker: &mut Worker<Generic>, load_balance_factor: usize) {
+    assert!(load_balance_factor > 0);
 
-            let writer: EventWriter<T, _, _> = EventWriter::new(stream);
-            unsafe { log_pag(worker, writer); }
-        } else {
-            panic!("Could not connect logging stream to: {:?}", addr);
-        }
+    if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
+        let writers = (0 .. load_balance_factor)
+            .map(|_| TcpStream::connect(&addr).expect("could not connect to logging stream"))
+            .map(|stream| {
+                // SnailTrail should be able to keep up with an online computation.
+                // If batch sizes are too large, they should be buffered. Blocking the
+                // TCP connection is not an option as it slows down the main computation.
+                stream
+                    .set_nonblocking(true)
+                    .expect("set_nonblocking call failed");
+
+                EventWriter::<T, _, _>::new(stream)
+            })
+            .collect::<Vec<_>>();
+
+        unsafe { log_pag(worker, writers); }
     } else {
-        let name = format!("{:?}.dump", worker.index());
-        let path = Path::new(&name);
-        let file = match File::create(&path) {
-            Err(why) => panic!("couldn't create {}: {}", path.display(), why.description()),
-            Ok(file) => file,
-        };
-        let writer: EventWriter<T, _, _> = EventWriter::new(file);
-        unsafe { log_pag(worker, writer); }
+        let writers = (0 .. load_balance_factor).map(|i| {
+            let name = format!("../timely-snailtrail/{:?}.dump", (worker.index() + i * worker.peers()));
+            info!("creating {}", name);
+            let path = Path::new(&name);
+            let file = match File::create(&path) {
+                Err(why) => panic!("couldn't create {}: {}", path.display(), why.description()),
+                Ok(file) => file,
+            };
+            EventWriter::<T, _, _>::new(file)
+        }).collect::<Vec<_>>();
+
+        unsafe { log_pag(worker, writers); }
     }
 }
 
@@ -229,7 +238,7 @@ enum ComputationStatus {
 /// Failing to do so might have unexpected effects on the PAG creation.
 unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation>(
     worker: &mut Worker<Generic>,
-    mut writer: ReplayWriter<T, W>,
+    mut writers: Vec<ReplayWriter<T, W>>,
 ) {
     // initialized to default, dropped as soon as the
     // computation starts running.
@@ -249,15 +258,18 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
 
     let mut status = ComputationStatus::Ongoing;
 
-    // System time is only allowed to progress once until a
-    // progress message is sent.
+    // Advances system time if it hasn't yet been advanced
+    // for the current progress batch.
     let mut tick_sys = true;
 
-    // If a computation's epoch size exceeds `MAX_FUEL`, events are batched
+    // If a computation's epoch size exceeds `MAX_FUEL` events are batched
     // into multiple processing times within that epoch.
     const MAX_FUEL: usize = 512;
     let mut fuel = MAX_FUEL;
 
+    let mut curr_writer = 0;
+
+    // for debugging
     let worker_index = worker.index();
 
     worker
@@ -265,7 +277,7 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
         .insert::<TimelyEvent, _>("timely", move |time, data| {
             match status {
                 ComputationStatus::Ongoing => {
-                    for mut tuple in data.drain(..) {
+                    for tuple in data.drain(..) {
                         match &tuple.2 {
                             Text(e) => {
                                 info!("w{}@{:?} text event: {}", worker_index, curr_cap, e);
@@ -277,46 +289,57 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
                                 // Text events mark ends of epochs in the computation.
                                 next_cap.tick_epoch(&tuple.0);
 
+                                info!("flushing to {}", curr_writer);
                                 flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
-                                             &mut writer,
+                                             &mut writers[curr_writer],
                                              &mut curr_cap,
                                              worker_index);
+                                curr_writer = (curr_writer + 1) % writers.len();
                                 fuel = MAX_FUEL;
                                 tick_sys = true;
                             }
                             Operates(_) | Channels(_) => {
+                                fuel -= 1;
+                                seq_no += 1;
+
                                 // all operates events should happen in the initialization epoch,
                                 // i.e., before any Text event epoch markers have been observed
                                 assert!(next_cap == curr_cap && curr_cap == Default::default());
 
-                                fuel -= 1;
-                                seq_no += 1;
-
                                 buffer.push((curr_cap.get_epoch(), seq_no, (Default::default(), tuple.1, tuple.2)));
                             }
-                            Progress(_) | Messages(_) | Schedule(_) => {
-                                fuel -= 1;
-                                seq_no += 1;
+                            other => {
+                                // we're only interested in Schedule, Progress and Messages events.
+                                // Progress and Messages event shouldn't be local only.
+                                let push_new_event = match other {
+                                    Schedule(_) => true,
+                                    Progress(e) if e.is_send || e.source != tuple.1 => true,
+                                    Messages(e) if e.source != e.target => true,
+                                    _ => false
+                                };
 
-                                // Advance system time if it hasn't yet been advanced
-                                // for the current progress batch.
-                                if tick_sys {
-                                    next_cap.tick_sys(&tuple.0);
-                                    tick_sys = false;
+                                if push_new_event {
+                                    fuel -= 1;
+                                    seq_no += 1;
 
-                                    advance_cap(&mut writer, &mut next_cap, &mut curr_cap, worker_index);
+                                    if tick_sys {
+                                        next_cap.tick_sys(&tuple.0);
+                                        tick_sys = false;
+                                        advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
+                                    }
+
+                                    buffer.push((curr_cap.get_epoch(), seq_no, tuple));
                                 }
-
-                                buffer.push((curr_cap.get_epoch(), seq_no, tuple));
                             }
-                            _ => {}
                         }
 
                         if fuel == 0 {
+                            info!("flushing to {}", curr_writer);
                             flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
-                                         &mut writer,
+                                         &mut writers[curr_writer],
                                          &mut curr_cap,
                                          worker_index);
+                            curr_writer = (curr_writer + 1) % writers.len();
                             fuel = MAX_FUEL;
                             tick_sys = true;
                         }
@@ -326,8 +349,10 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
                     info!("w{}@ep{:?}: timely logging wrapping up", worker_index, curr_cap);
                     assert!(buffer.len() == 0, "flush buffer before wrap up!");
 
-                    // free capability
-                    writer.push(Event::Progress(vec![(curr_cap.clone(), -1)]));
+                    // free capabilities
+                    for writer in writers.iter_mut() {
+                        writer.push(Event::Progress(vec![(curr_cap.clone(), -1)]));
+                    }
 
                     status = ComputationStatus::WrappedUp;
                 }
@@ -353,19 +378,21 @@ where
 
 /// Sends progress information for SnailTrail. The capability is
 /// downgraded to `next_cap`, allowing the frontier to advance.
-fn advance_cap<W, T>(writer: &mut ReplayWriter<T, W>,
-                      next_cap: &mut T,
-                      curr_cap: &mut T,
-                      index: usize)
+fn advance_cap<W, T>(writers: &mut Vec<ReplayWriter<T, W>>,
+                     next_cap: &mut T,
+                     curr_cap: &mut T,
+                     index: usize)
 where
     W: 'static + Write,
     T: Abomonation + Clone + Debug {
-
     info!("w{} progresses from {:?} to {:?}", index, curr_cap, next_cap);
-    writer.push(Event::Progress(vec![
-        (next_cap.clone(), 1),
-        (curr_cap.clone(), -1),
-    ]));
+
+    for writer in writers.iter_mut() {
+        writer.push(Event::Progress(vec![
+            (next_cap.clone(), 1),
+            (curr_cap.clone(), -1),
+        ]));
+    }
 
     *curr_cap = next_cap.clone();
 }

@@ -1,14 +1,14 @@
 use timely_adapter::{
     connect::{make_replayers, open_sockets},
-    make_log_records,
 };
+
 use timely_snailtrail::{pag, Config};
 
 use timely::dataflow::{
     operators::{capture::replay::Replay, probe::Probe},
     ProbeHandle,
+    Scope
 };
-use timely::dataflow::Scope;
 
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use logformat::pair::Pair;
 fn main() {
     env_logger::init();
 
-    let workers = std::env::args().nth(1).unwrap().parse::<String>().unwrap();
+    let worker_peers = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
     let source_peers = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
     let from_file = if let Some(_) = std::env::args().nth(3) {
         true
@@ -25,7 +25,8 @@ fn main() {
         false
     };
     let config = Config {
-        timely_args: vec!["-w".to_string(), workers],
+        timely_args: vec!["-w".to_string(), worker_peers.to_string()],
+        worker_peers,
         source_peers,
         from_file,
     };
@@ -36,13 +37,14 @@ fn main() {
 fn inspector(config: Config) {
     // creates one socket per worker in the computation we're examining
     let sockets = if !config.from_file {
-        Some(open_sockets(config.source_peers))
+        Some(open_sockets(config.worker_peers))
     } else {
         None
     };
 
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {
         let timer = std::time::Instant::now();
+        let mut timer2 = std::time::Instant::now();
 
         let index = worker.index();
         if index == 0 {
@@ -52,31 +54,15 @@ fn inspector(config: Config) {
         // read replayers from file (offline) or TCP stream (online)
         let replayers = make_replayers(
             worker.index(),
-            worker.peers(),
+            config.worker_peers,
             config.source_peers,
             sockets.clone(),
         );
-        let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
-            // current dataset (overall times, adding steps in):
-            // 2w, debug
-            // read_in: ~2500ms
-            // log_records no peel: ~2600ms
-            // log_records with peel: ~3600ms
-            // pag local edges: ~9400ms
-            // pag control edges: ~9400ms
-            use differential_dataflow::operators::reduce::Count;
-            use timely::dataflow::operators::inspect::Inspect;
 
+        let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
             pag::create_pag(scope, replayers, index)
-                // replayers.replay_into(scope)
-                // .inspect_time(move |t, x| println!("{}\t{:?}\t{:?}", index, t, x))
-                // make_log_records(scope, replayers, index)
-                // .inspect(|x| println!("{:?}", x))
-                // .inspect_batch(|t, x| println!("{:?} ----- {:?}", t, x))
-                // .inspect(|x| println!("{:?}", x))
-                // .map(|_| 0)
-                // .count()
-                // .inspect_batch(|t, x| println!("{:?}, count: {:?}", t, x))
+            // replayers.replay_into(scope)
+            // timely_adapter::create_lrs(scope, replayers, index)
                 .probe()
         });
 
@@ -86,7 +72,8 @@ fn inspector(config: Config) {
             probe.with_frontier(|f| {
                 let f = f.to_vec();
                 if f != curr_frontier {
-                    println!("w{} frontier: {:?}", index, f);
+                    println!("w{} frontier: {:?} | {:?}", index, f, timer2.elapsed().as_millis());
+                    timer2 = std::time::Instant::now();
                     curr_frontier = f;
                 }
             });

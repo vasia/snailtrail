@@ -25,10 +25,11 @@ fn main() {
     // snag a filename to use for the input graph.
     let filename = std::env::args().nth(1).unwrap();
     let batching = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
+    let load_balance_factor = std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
     let inspect = std::env::args().any(|x| x == "inspect");
 
     timely::execute_from_args(std::env::args().skip(2), move |worker| {
-        register_logger::<Pair<u64, Duration>>(worker);
+        register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
 
         let timer = std::time::Instant::now();
         let graph = GraphMMap::new(&filename);

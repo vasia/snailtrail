@@ -29,6 +29,8 @@ pub struct Config {
     pub source_peers: usize,
     /// whether SnailTrail should read from file or TCP
     pub from_file: bool,
+    /// # of SnailTrail workers
+    pub worker_peers: usize,
 }
 
 // /// Elements of a complete activity graph, including ingress/egress points

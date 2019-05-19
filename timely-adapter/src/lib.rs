@@ -71,18 +71,9 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
     where S::Timestamp: Lattice + Ord
 {
     fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize> {
-        self
-            .exchange(|(epoch, seq_no, _x)| *seq_no)
-            .make_lrs(index)
-            // .inspect_time(|t, x| println!("{:?}\t{:?}", t, x))
+        self.make_lrs(index)
             .as_collection()
-            // .peel_operators(&self)
-
-        // .consolidate()
-        // .inner
-        // .exchange(|x| (x.0).local_worker)
-        // .inspect_time(move |t, x| if index == 0 { println!("{:?}", x);})
-        // .as_collection()
+            .peel_operators(&self)
 
         // arrange_core + as_collection is the same as consolidate,
         // but allows to specify the exchange contract used. We
@@ -99,6 +90,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
             move |input, output| {
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
+
                     let mut session = output.session(&cap);
 
                     for comp_event in vector.drain(..) {
@@ -146,81 +138,69 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     1,
                 ))
             }
-            // data messages
+            // remote data messages
             Messages(event) => {
-                // @TODO: push the filtering of local data messages into log_pag
-                // discard local data messages for now
-                if event.source == event.target {
-                    None
+                let remote_worker = if event.is_send {
+                    Some(event.target as u64)
                 } else {
-                    let remote_worker = if event.is_send {
-                        Some(event.target as u64)
-                    } else {
-                        Some(event.source as u64)
-                    };
+                    Some(event.source as u64)
+                };
 
-                    let event_type = if event.is_send {
-                        EventType::Sent
-                    } else {
-                        EventType::Received
-                    };
+                let event_type = if event.is_send {
+                    EventType::Sent
+                } else {
+                    EventType::Received
+                };
 
-                    Some((
-                        LogRecord {
-                            seq_no,
-                            epoch,
-                            timestamp: t,
-                            local_worker: wid as u64,
-                            activity_type: ActivityType::DataMessage,
-                            event_type,
-                            remote_worker,
-                            operator_id: None,
-                            channel_id: Some(event.channel as u64),
-                        },
-                        time,
-                        1,
-                    ))
-                }
+                Some((
+                    LogRecord {
+                        seq_no,
+                        epoch,
+                        timestamp: t,
+                        local_worker: wid as u64,
+                        activity_type: ActivityType::DataMessage,
+                        event_type,
+                        remote_worker,
+                        operator_id: None,
+                        channel_id: Some(event.channel as u64),
+                    },
+                    time,
+                    1,
+                ))
             }
             // Control Messages
             Progress(event) => {
-                // discard local progress updates for now
-                // @TODO: push the filtering of local control messages into log_pag
-                if !event.is_send && event.source == wid {
+                let event_type = if event.is_send {
+                    EventType::Sent
+                } else {
+                    EventType::Received
+                };
+
+                let remote_worker = if event.is_send {
+                    // Outgoing progress messages are broadcasts, so we don't know
+                    // where they'll end up.
                     None
                 } else {
-                    let event_type = if event.is_send {
-                        EventType::Sent
-                    } else {
-                        EventType::Received
-                    };
+                    Some(event.source as u64)
+                };
 
-                    let remote_worker = if event.is_send {
-                        // Outgoing progress messages are broadcasts, so we don't know
-                        // where they'll end up.
-                        None
-                    } else {
-                        Some(event.source as u64)
-                    };
-
-                    Some((
-                        LogRecord {
-                            seq_no,
-                            epoch,
-                            timestamp: t,
-                            local_worker: wid as u64,
-                            activity_type: ActivityType::ControlMessage,
-                            event_type,
-                            remote_worker,
-                            operator_id: None,
-                            channel_id: Some(event.channel as u64),
-                        },
-                        time,
-                        1,
-                    ))
-                }
+                Some((
+                    LogRecord {
+                        seq_no,
+                        epoch,
+                        timestamp: t,
+                        local_worker: wid as u64,
+                        activity_type: ActivityType::ControlMessage,
+                        event_type,
+                        remote_worker,
+                        operator_id: None,
+                        channel_id: Some(event.channel as u64),
+                    },
+                    time,
+                    1,
+                ))
             }
-            _ => None,
+            _ => None
         }
     }
 }
