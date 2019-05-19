@@ -8,7 +8,7 @@
 extern crate log;
 
 pub mod connect;
-use crate::connect::Replayer;
+use crate::connect::{Replayer, CompEvent};
 
 use logformat::{ActivityType, EventType, LogRecord};
 use logformat::pair::Pair;
@@ -41,10 +41,7 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::lattice::Lattice;
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
-/// The `LogRecord`s are sorted by timestamp and exchanged so that
-/// SnailTrail peer == computation peer.
-/// Should be called from within a dataflow.
-pub fn make_log_records<S, R>(
+pub fn create_lrs<S, R>(
     scope: &mut S,
     replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
@@ -54,17 +51,32 @@ where
     S::Timestamp: Lattice + Ord,
     R: Read + 'static,
 {
-    let stream = replayers.replay_into(scope);
+    replayers
+        .replay_into(scope)
+        .construct_lrs(index)
+}
 
-    let log_records = stream
-        .events_to_log_records(index)
-        .as_collection()
-        .peel_operators(&stream);
+/// Operator that converts a Stream of TimelyEvents to their LogRecord representation
+trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
+    /// Constructs a collection of log records to be used in PAG construction from an event stream.
+    fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize>;
+    /// Makes a stream of log records from an event stream.
+    fn make_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
+    /// Builds a log record at differential time `time` from the supplied computation event.
+    fn build_lr<T: Lattice + Ord>(comp_event: CompEvent, time: T) -> Option<(LogRecord, T, isize)>;
+}
 
-    // arrange_core + as_collection is the same as consolidate,
-    // but allows to specify the exchange contract used. We
-    // don't want records to be shuffled around -> Pipeline.
-    log_records
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
+    for Stream<S, CompEvent>
+    where S::Timestamp: Lattice + Ord
+{
+    fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize> {
+        self
+            .exchange(|(epoch, seq_no, _x)| *seq_no)
+            .make_lrs(index)
+            // .inspect_time(|t, x| println!("{:?}\t{:?}", t, x))
+            .as_collection()
+            // .peel_operators(&self)
 
         // .consolidate()
         // .inner
@@ -72,180 +84,147 @@ where
         // .inspect_time(move |t, x| if index == 0 { println!("{:?}", x);})
         // .as_collection()
 
+        // arrange_core + as_collection is the same as consolidate,
+        // but allows to specify the exchange contract used. We
+        // don't want records to be shuffled around -> Pipeline.
         // .arrange_core::<_, OrdValSpine<_, _, _, _>>(Pipeline, "PipelinedConsolidate")
         // .as_collection(|d, _| d.clone())
         // .inspect(|x| println!("{:?}", x))
-}
+    }
 
-/// Operator that converts a Stream of TimelyEvents to their LogRecord representation
-trait EventsToLogRecords<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
-    /// Converts a Stream of TimelyEvents to their LogRecord representation
-    fn events_to_log_records(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
-}
-
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> EventsToLogRecords<S>
-    for Stream<S, (u64, (Duration, usize, TimelyEvent))>
-    where S::Timestamp: Lattice + Ord
-{
-    fn events_to_log_records(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
-        self.unary_frontier(Pipeline, "EpochalFlatMap", |_capability, _info| {
-            // This only works since we're sure that each worker replays a consistent
-            // worker log. In other cases, we'd need to implement a smarter stateful operator.
+    fn make_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
+        self.unary_frontier(Pipeline, "LogRecordConstruct", |_capability, _info| {
             let mut vector = Vec::new();
-
-            // holds a continually increasing seq_no for every source_peer this worker maintains
-            let mut seq_no: Vec<u64> = Vec::new();
 
             move |input, output| {
                 input.for_each(|cap, data| {
-                    // drop the current capability
-                    let retained = cap.retain();
-
                     data.swap(&mut vector);
-                    for (epoch, (t, wid, x)) in vector.drain(..) {
-                        let record = match x {
-                            // Scheduling & Processing
-                            Schedule(event) => {
-                                let event_type = if event.start_stop == StartStop::Start {
-                                    EventType::Start
-                                } else {
-                                    EventType::End
-                                };
+                    let mut session = output.session(&cap);
 
-                                get_or_fill(&mut seq_no, wid);
-                                seq_no[wid] += 1;
-
-                                Some((
-                                    LogRecord {
-                                        seq_no: seq_no[wid] - 1,
-                                        epoch,
-                                        timestamp: t,
-                                        local_worker: wid as u64,
-                                        activity_type: ActivityType::Scheduling,
-                                        event_type,
-                                        correlator_id: None,
-                                        remote_worker: None,
-                                        operator_id: Some(event.id as u64),
-                                        channel_id: None,
-                                    },
-                                    retained.time().clone(),
-                                    1,
-                                ))
-                            }
-                            // data messages
-                            Messages(event) => {
-                                // @TODO: push the filtering of local data messages into log_pag
-                                // discard local data messages for now
-                                if event.source == event.target {
-                                    None
-                                } else {
-                                    let remote_worker = if event.is_send {
-                                        Some(event.target as u64)
-                                    } else {
-                                        Some(event.source as u64)
-                                    };
-
-                                    let event_type = if event.is_send {
-                                        EventType::Sent
-                                    } else {
-                                        EventType::Received
-                                    };
-
-                                    get_or_fill(&mut seq_no, wid);
-                                    seq_no[wid] += 1;
-
-                                    Some((
-                                        LogRecord {
-                                            seq_no: seq_no[wid] - 1,
-                                            epoch,
-                                            timestamp: t,
-                                            local_worker: wid as u64,
-                                            activity_type: ActivityType::DataMessage,
-                                            event_type,
-                                            correlator_id: Some(event.seq_no as u64),
-                                            remote_worker,
-                                            operator_id: None,
-                                            channel_id: Some(event.channel as u64),
-                                        },
-                                        retained.time().clone(),
-                                        1,
-                                    ))
-                                }
-                            }
-                            // Control Messages
-                            Progress(event) => {
-                                // discard local progress updates for now
-                                // @TODO: push the filtering of local control messages into log_pag
-                                if !event.is_send && event.source == wid {
-                                    None
-                                } else {
-                                    let event_type = if event.is_send {
-                                        EventType::Sent
-                                    } else {
-                                        EventType::Received
-                                    };
-
-                                    let remote_worker = if event.is_send {
-                                        // Outgoing progress messages are broadcasts, so we don't know
-                                        // where they'll end up.
-                                        None
-                                    } else {
-                                        Some(event.source as u64)
-                                    };
-
-                                    get_or_fill(&mut seq_no, wid);
-                                    seq_no[wid] += 1;
-
-                                    Some((
-                                        LogRecord {
-                                            seq_no: seq_no[wid] - 1,
-                                            epoch,
-                                            timestamp: t,
-                                            local_worker: wid as u64,
-                                            activity_type: ActivityType::ControlMessage,
-                                            event_type,
-                                            correlator_id: Some(event.seq_no as u64),
-                                            remote_worker,
-                                            operator_id: None,
-                                            channel_id: Some(event.channel as u64),
-                                        },
-                                        retained.time().clone(),
-                                        1,
-                                    ))
-                                }
-                            }
-                            _ => None,
-                        };
+                    for comp_event in vector.drain(..) {
+                        let record = Self::build_lr(comp_event, cap.time().clone());
 
                         if let Some(record) = record {
-                            let mut session = output.session(&retained);
-
                             // retract every log record at next epoch
                             let mut retract = record.clone();
                             retract.1.first += 1;
                             retract.2 = -1;
-                            session.give(retract);
 
                             session.give(record);
+                            session.give(retract);
                         }
                     }
                 });
             }
         })
     }
-}
 
-fn get_or_fill<T: Default + Copy + Clone>(v: &mut Vec<T>, index: usize) -> T {
-    if let Some(x) = v.get(index) {
-        *x
-    } else {
-        for _ in v.len() .. index + 1  {
-            v.push(Default::default());
+    fn build_lr<T: Lattice + Ord>(comp_event: CompEvent, time: T) -> Option<(LogRecord, T, isize)> {
+        let (epoch, seq_no, (t, wid, x)) = comp_event;
+        match x {
+            // Scheduling & Processing
+            Schedule(event) => {
+                let event_type = if event.start_stop == StartStop::Start {
+                    EventType::Start
+                } else {
+                    EventType::End
+                };
+
+                Some((
+                    LogRecord {
+                        seq_no,
+                        epoch,
+                        timestamp: t,
+                        local_worker: wid as u64,
+                        activity_type: ActivityType::Scheduling,
+                        event_type,
+                        remote_worker: None,
+                        operator_id: Some(event.id as u64),
+                        channel_id: None,
+                    },
+                    time,
+                    1,
+                ))
+            }
+            // data messages
+            Messages(event) => {
+                // @TODO: push the filtering of local data messages into log_pag
+                // discard local data messages for now
+                if event.source == event.target {
+                    None
+                } else {
+                    let remote_worker = if event.is_send {
+                        Some(event.target as u64)
+                    } else {
+                        Some(event.source as u64)
+                    };
+
+                    let event_type = if event.is_send {
+                        EventType::Sent
+                    } else {
+                        EventType::Received
+                    };
+
+                    Some((
+                        LogRecord {
+                            seq_no,
+                            epoch,
+                            timestamp: t,
+                            local_worker: wid as u64,
+                            activity_type: ActivityType::DataMessage,
+                            event_type,
+                            remote_worker,
+                            operator_id: None,
+                            channel_id: Some(event.channel as u64),
+                        },
+                        time,
+                        1,
+                    ))
+                }
+            }
+            // Control Messages
+            Progress(event) => {
+                // discard local progress updates for now
+                // @TODO: push the filtering of local control messages into log_pag
+                if !event.is_send && event.source == wid {
+                    None
+                } else {
+                    let event_type = if event.is_send {
+                        EventType::Sent
+                    } else {
+                        EventType::Received
+                    };
+
+                    let remote_worker = if event.is_send {
+                        // Outgoing progress messages are broadcasts, so we don't know
+                        // where they'll end up.
+                        None
+                    } else {
+                        Some(event.source as u64)
+                    };
+
+                    Some((
+                        LogRecord {
+                            seq_no,
+                            epoch,
+                            timestamp: t,
+                            local_worker: wid as u64,
+                            activity_type: ActivityType::ControlMessage,
+                            event_type,
+                            remote_worker,
+                            operator_id: None,
+                            channel_id: Some(event.channel as u64),
+                        },
+                        time,
+                        1,
+                    ))
+                }
+            }
+            _ => None,
         }
-
-        v[index]
     }
 }
+
 
 /// Strips a `Collection` of `LogRecord`s from encompassing operators.
 trait PeelOperators<S: Scope> where S::Timestamp: Lattice + Ord {
@@ -255,7 +234,7 @@ trait PeelOperators<S: Scope> where S::Timestamp: Lattice + Ord {
     /// the surrounding iterate operators for loops)
     fn peel_operators(
         &self,
-        stream: &Stream<S, (u64, (Duration, usize, TimelyEvent))>,
+        stream: &Stream<S, CompEvent>,
     ) -> Collection<S, LogRecord, isize>;
 }
 
@@ -263,7 +242,7 @@ impl<S: Scope> PeelOperators<S> for Collection<S, LogRecord, isize>
 where S::Timestamp: Lattice + Ord {
     fn peel_operators(
         &self,
-        stream: &Stream<S, (u64, (Duration, usize, TimelyEvent))>,
+        stream: &Stream<S, CompEvent>,
     ) -> Collection<S, LogRecord, isize> {
         // only operates events, keyed by addr
         let operates = stream
@@ -275,7 +254,7 @@ where S::Timestamp: Lattice + Ord {
                         let mut session = output.session(&cap);
 
                         data.swap(&mut buffer);
-                        for (_, (t, wid, x)) in buffer.drain(..) {
+                        for (_epoch, _seq_no, (t, wid, x)) in buffer.drain(..) {
                             // according to contract defined in connect.rs, dataflow setup
                             // is collapsed into data-t=1ns
                             if t.as_nanos() == 0 {

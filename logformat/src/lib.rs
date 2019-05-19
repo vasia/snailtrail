@@ -226,11 +226,12 @@ pub type ChannelId = u64;
 ///
 /// It is the underlying structure from which the PAG construction starts.
 /// If necessary, it can also be serialized e.g. into a `msgpack` representation.
-#[derive(Abomonation, PartialEq, Eq, Hash, Debug, Clone)]
+#[derive(Abomonation, PartialEq, Eq, Hash, Clone)]
 pub struct LogRecord {
-    /// seq_no
+    /// worker-unique identifier of a message, given in order the events are logged
+    /// in the computation.
     pub seq_no: u64,
-    /// epoch
+    /// epoch of the computation this record belongs to
     pub epoch: u64,
     /// Event time in nanoseconds since the Epoch (midnight, January 1, 1970 UTC).
     pub timestamp: Timestamp,
@@ -241,8 +242,6 @@ pub struct LogRecord {
     /// Identifies which end of an edge this program event belongs to.
     /// E.g. start or end for scheduling, sent or received for communication events.
     pub event_type: EventType,
-    /// Opaque label used to group the two records belonging to a program activity.
-    pub correlator_id: Option<CorrelatorId>,
     /// Similar to `local_worker` but specifies the worker ID for the other end of a sent/received message.
     pub remote_worker: Option<Worker>,
     /// Unique id for the operator in the dataflow. This only applies for some event types, e.g. scheduling or processing.
@@ -264,8 +263,11 @@ impl PartialOrd for LogRecord {
 }
 
 
-impl std::fmt::Display for LogRecord {
+impl std::fmt::Debug for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "LR @ {:?} w{}\t{:?} {:?}\tcorr: {:?}\tremote: {:?}\top: {:?}\tch: {:?}", self.timestamp, self.local_worker, self.event_type, self.activity_type, self.correlator_id, self.remote_worker, self.operator_id, self.channel_id)
+        write!(f, "e{}@t{:?} (s{}@w{}) | {:?} {:?} |\t to {:?} \t op {:?} \t ch {:?}",
+               self.epoch, self.timestamp, self.seq_no, self.local_worker,
+               self.event_type, self.activity_type,
+               self.remote_worker, self.operator_id, self.channel_id)
     }
 }

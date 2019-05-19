@@ -15,7 +15,7 @@ use timely::dataflow::channels::pact::Pipeline;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
-use timely_adapter::{connect::Replayer, make_log_records};
+use timely_adapter::{connect::Replayer, create_lrs};
 
 /// A node in the PAG
 #[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy)]
@@ -89,6 +89,12 @@ impl PartialOrd for PagEdge {
 
 // @TODO currently, this creates a new pag per epoch, but never removes the old one.
 //       so state will continually grow and multiple pags exist side by side.
+// @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
+// e.g. sched start -> sched end, no interleave, start & end always belong to scheduling,
+// sent/received always to remote messages, we don't see message types that we can't handle yet,
+// t1 is always > t0, same count of sent and received remote messages for every epoch
+// same results regardless of worker count, received events always have a remote worker
+// matched remote events are (remote-count / 2), remote event count is always even
 /// Creates a PAG (a Collection of `PagEdge`s, grouped by epoch) from the provided `Replayer`s.
 /// To be called from within a timely computation.
 pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read> (
@@ -97,16 +103,8 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read> 
     index: usize,
 ) -> Collection<S, PagEdge, isize>
 where S::Timestamp: Lattice + Ord {
-    let records: Collection<_, LogRecord, isize> = make_log_records(scope, replayers, 0);
-
-    // @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
-    // e.g. sched start -> sched end, no interleave, start & end always belong to scheduling,
-    // sent/received always to remote messages, we don't see message types that we can't handle yet,
-    // t1 is always > t0, same count of sent and received remote messages for every epoch
-    // same results regardless of worker count, received events always have a remote worker
-    // matched remote events are (remote-count / 2), remote event count is always even
-
-    records.construct_pag(index)
+    create_lrs(scope, replayers, index)
+        .construct_pag(index)
 }
 
 
@@ -117,7 +115,7 @@ where S::Timestamp: Lattice + Ord {
     /// and data edges.
     fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize>;
     /// Takes `LogRecord`s and connects local edges (per epoch, per worker)
-    fn make_local_edges(&self) -> Collection<S, PagEdge, isize>;
+    fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize>;
     /// Helper to create a `PagEdge` from two `LogRecord`s
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
     // /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
@@ -130,15 +128,15 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S
 where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize> {
 use timely::dataflow::operators::inspect::Inspect;
-        self.make_local_edges()
+        self.make_local_edges(index)
         // .concat(&self.make_data_edges())
     }
 
     // this should scale with epoch size, as it can update incrementally
     // however, it takes longer than simple timely computations
-    fn make_local_edges(&self) -> Collection<S, PagEdge, isize> {
+    fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize> {
         let edge_start = self.map(|x| ((x.local_worker, x.epoch, x.seq_no), x));
-        let edge_end = self.map(|x| ((x.local_worker, x.epoch, x.seq_no), x));
+        let edge_end = self.map(|x| ((x.local_worker, x.epoch, x.seq_no + 1), x));
 
         edge_start
             .join(&edge_end)
