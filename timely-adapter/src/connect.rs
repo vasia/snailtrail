@@ -216,7 +216,6 @@ enum ComputationStatus {
     WrappedUp
 }
 
-// @TODO: further describe contract between log_pag and SnailTrail; mark as unsafe
 // @TODO: for triangles query with round size == 1, the computation is slowed down by TCP.
 //        A reason for this might be the overhead in creating TCP packets, so it might be
 //        worthwhile investigating the reintroduction of batching for very small computation
@@ -313,29 +312,62 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
 
                                 buffer.push((curr_cap.get_epoch(), seq_no, (Default::default(), wid, x)));
                             }
-                            other => {
-                                // we're only interested in Schedule, Progress and Messages events.
-                                // Progress and Messages event shouldn't be local only.
-                                let push_new_event = match other {
-                                    Schedule(_) => true,
-                                    Progress(e) if e.is_send || e.source != tuple.1 => true,
-                                    Messages(e) if e.source != e.target => true,
-                                    _ => false
-                                };
-
-                                if push_new_event {
+                            Schedule(e) => {
+                                // extend buffer size by 1 to avoid breaking up repositioning of
+                                // schedule start events and consequent data messages
+                                if fuel > 1 || e.start_stop == StartStop::Stop {
                                     fuel -= 1;
-                                    seq_no += 1;
-
-                                    if tick_sys {
-                                        next_cap.tick_sys(&tuple.0);
-                                        tick_sys = false;
-                                        advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
-                                    }
-
-                                    buffer.push((curr_cap.get_epoch(), seq_no, tuple));
                                 }
+                                seq_no += 1;
+
+                                if tick_sys {
+                                    next_cap.tick_sys(&t);
+                                    tick_sys = false;
+                                    advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
+                                }
+
+                                buffer.push((curr_cap.get_epoch(), seq_no, (t, wid, x)));
                             }
+                            // Remote progress events
+                            Progress(e) if e.is_send || e.source != wid => {
+                                fuel -= 1;
+                                seq_no += 1;
+                                if tick_sys {
+                                    next_cap.tick_sys(&t);
+                                    tick_sys = false;
+                                    advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
+                                }
+                                buffer.push((curr_cap.get_epoch(), seq_no, (t, wid, x)));
+                            }
+                            // Remote data receive events
+                            Messages(e) if e.source != e.target && e.target == wid => {
+                                seq_no += 1;
+
+                                // @TODO: what about timestamp?
+                                let (last_epoch, last_seq, last_event) = buffer.pop()
+                                    .expect("non-empty buffer required");
+
+                                assert!(if let Schedule(e) = &last_event.2 {e.start_stop == StartStop::Start}
+                                        else {false});
+
+                                // Reposition received remote data message:
+                                // 1. push the data message with previous' seq_no
+                                buffer.push((curr_cap.get_epoch(), last_seq, (t, wid, x)));
+                                // 2. push the schedule event
+                                buffer.push((last_epoch, seq_no, last_event));
+                            }
+                            // remote data send events
+                            Messages(e) if e.source != e.target => {
+                                fuel -= 1;
+                                seq_no += 1;
+                                if tick_sys {
+                                    next_cap.tick_sys(&t);
+                                    tick_sys = false;
+                                    advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
+                                }
+                                buffer.push((curr_cap.get_epoch(), seq_no, (t, wid, x)));
+                            }
+                            _ => {}
                         }
 
                         if fuel == 0 {
