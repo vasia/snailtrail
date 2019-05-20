@@ -36,6 +36,18 @@ To try out SnailTrail, decide between online (via TCP) and offline (from file) m
 
 Further debug logging of the examples and SnailTrail is provided by Rust's `log` and `env_log` crates. Passing `RUST_LOG=info` (or `trace`) as env variable when running examples should write out further logging to your `std::out`.
 
+### Show me the code!
+
+Check out the `Structure` section of this `README` for a high-level overview.
+
+The "magic" mostly happens at 
+- `connect.rs` for (1) logging a computation and (2) connecting to it from SnailTrail, 
+- `timely-adapter/src/lib.rs` for the `LogRecord` creation,
+- `timely-snailtrail/src/pag.rs` for the `PAG` creation, and the
+- `inspect.rs`, `triangles.rs` and `custom_operator.rs` examples tying it all together.
+
+*Disclaimer:* The PAG creation currently only creates local edges (I still need to update the remote edge creation for all the new stuff I added, they're commented out in `pag.rs`).
+
 ## Structure
 
 ### Overview
