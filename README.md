@@ -8,6 +8,32 @@ This is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a 
 
 The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.9 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow) and won't refrain from breaking existing upstream abstractions (even though they should be relatively easy to add back in at a later point in time).
 
+## Getting Started
+
+To try out SnailTrail, decide between online (via TCP) and offline (from file) mode.
+
+### Offline
+
+1. First, start a computation you would like to log: Here, we run `cargo run --example triangles <input file> <batch size> <load balance factor> <#computation workers>` from `timely-adapter`.
+
+    E.g., `cargo run --example triangles livejournal.graph 100 3 -w2` will load the `livejournal.graph` to use in the triangles computation, which is started with a batch size of 100. It is distributed over two workers, which will each write out events to three files.
+2. Run SnailTrail to create a PAG: From `timely-snailtrail`, run `cargo run --example inspect <# SnailTrail workers> <# of (simulated) source computation workers> <from-file?>`. 
+
+    E.g., `cargo run --example inspect 2 6 f` will run SnailTrail with two workers, reading from the 6 files (`2 workers * 3 load balance factor`) we generated in step 1.
+3. This creates a PAG as a differential `Collection`, to log it and use it, tweak `timely-snailtrail/examples/inspect.rs`.
+
+### Online
+
+1. First start SnailTrail, similarly to Offline step 2, but without the `from-file?` flag set; e.g.: `cargo run --example inspect 2 6`.
+2. Now, start the computation you would like to log with env variable `SNAILTRAIL_ADDR=localhost:8000`.
+
+    E.g., just like in offline mode: `env SNAILTRAIL_ADDR=localhost:8000 cargo run --example triangles livejournal.graph 100 3 -w2`
+3. This creates a PAG, to log it and use it, tweak `timely-snailtrail/examples/inspect.rs`.
+
+### Debugging
+
+Further debug logging of the examples and SnailTrail is provided by Rust's `log` and `env_log` crates. Passing `RUST_LOG=info` (or `trace`) as env variable when running examples should write out further logging to your `std::out`.
+
 ## Structure
 
 ### Overview
