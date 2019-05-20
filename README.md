@@ -41,7 +41,7 @@ Further debug logging of the examples and SnailTrail is provided by Rust's `log`
 Check out the `Structure` section of this `README` for a high-level overview.
 
 The "magic" mostly happens at 
-- `connect.rs` for (1) logging a computation and (2) connecting to it from SnailTrail, 
+- `timely-adapter/src/connect.rs` for (1) logging a computation and (2) connecting to it from SnailTrail, 
 - `timely-adapter/src/lib.rs` for the `LogRecord` creation,
 - `timely-snailtrail/src/pag.rs` for the `PAG` creation, and the
 - `inspect.rs`, `triangles.rs` and `custom_operator.rs` examples tying it all together.
