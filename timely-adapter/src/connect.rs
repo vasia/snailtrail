@@ -22,7 +22,7 @@ use std::{
 use timely::{
     communication::allocator::Generic,
     dataflow::operators::capture::{event::EventPusher, Event, EventReader, EventWriter},
-    logging::{TimelyEvent, WorkerIdentifier},
+    logging::{TimelyEvent, WorkerIdentifier, StartStop},
     worker::Worker,
 };
 
@@ -205,6 +205,7 @@ impl NextEpoch for Pair<u64, Duration> {
 
 /// Status of logged computation. Changed by log message
 /// `[st] computation done`.
+#[derive(Eq, PartialEq)]
 enum ComputationStatus {
     /// Computation is ongoing
     Ongoing,
@@ -264,6 +265,8 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
 
     // If a computation's epoch size exceeds `MAX_FUEL` events are batched
     // into multiple processing times within that epoch.
+    // Received data messages don't use up fuel to avoid separating
+    // them from the schedules event that is used to reorder them.
     const MAX_FUEL: usize = 512;
     let mut fuel = MAX_FUEL;
 
@@ -277,17 +280,14 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
         .insert::<TimelyEvent, _>("timely", move |time, data| {
             match status {
                 ComputationStatus::Ongoing => {
-                    for tuple in data.drain(..) {
-                        match &tuple.2 {
+                    for (t, wid, x) in data.drain(..) {
+                        match &x {
+                            // Text events advance epochs, start and end logging
                             Text(e) => {
                                 info!("w{}@{:?} text event: {}", worker_index, curr_cap, e);
 
-                                if e.starts_with("[st] computation done") {
-                                    status = ComputationStatus::WrappingUp;
-                                }
-
                                 // Text events mark ends of epochs in the computation.
-                                next_cap.tick_epoch(&tuple.0);
+                                next_cap.tick_epoch(&t);
 
                                 info!("flushing to {}", curr_writer);
                                 flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
@@ -297,6 +297,11 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
                                 curr_writer = (curr_writer + 1) % writers.len();
                                 fuel = MAX_FUEL;
                                 tick_sys = true;
+
+                                if e.starts_with("[st] computation done") {
+                                    status = ComputationStatus::WrappingUp;
+                                    break;
+                                }
                             }
                             Operates(_) | Channels(_) => {
                                 fuel -= 1;
@@ -306,7 +311,7 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
                                 // i.e., before any Text event epoch markers have been observed
                                 assert!(next_cap == curr_cap && curr_cap == Default::default());
 
-                                buffer.push((curr_cap.get_epoch(), seq_no, (Default::default(), tuple.1, tuple.2)));
+                                buffer.push((curr_cap.get_epoch(), seq_no, (Default::default(), wid, x)));
                             }
                             other => {
                                 // we're only interested in Schedule, Progress and Messages events.
