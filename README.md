@@ -17,6 +17,8 @@ To try out SnailTrail, decide between online (via TCP) and offline (from file) m
 1. First, start a computation you would like to log: Here, we run `cargo run --example triangles <input file> <batch size> <load balance factor> <#computation workers>` from `timely-adapter`.
 
     E.g., `cargo run --example triangles livejournal.graph 100 3 -w2` will load the `livejournal.graph` to use in the triangles computation, which is started with a batch size of 100. It is distributed over two workers, which will each write out events to three files.
+    
+    If you don't have the triangles computation ready, you can try a very basic log that is easily tweakable with `cargo run --example custom_operator 3 -- -w2`.
 2. Run SnailTrail to create a PAG: From `timely-snailtrail`, run `cargo run --example inspect <# SnailTrail workers> <# of (simulated) source computation workers> <from-file?>`. 
 
     E.g., `cargo run --example inspect 2 6 f` will run SnailTrail with two workers, reading from the 6 files (`2 workers * 3 load balance factor`) we generated in step 1.
