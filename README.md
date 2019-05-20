@@ -14,7 +14,7 @@ To try out SnailTrail, decide between online (via TCP) and offline (from file) m
 
 ### Offline
 
-1. First, start a computation you would like to log: Here, we run `cargo run --example triangles <input file> <batch size> <load balance factor> <#computation workers>` from `timely-adapter`.
+1. First, start a computation you would like to log: As example, `cargo run --example triangles <input file> <batch size> <load balance factor> <#computation workers>` from within `timely-adapter`.
 
     E.g., `cargo run --example triangles livejournal.graph 100 3 -w2` will load the `livejournal.graph` to use in the triangles computation, which is started with a batch size of 100. It is distributed over two workers, which will each write out events to three files.
     
