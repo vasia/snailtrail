@@ -16,4 +16,4 @@ abomonation_derive = "0.3"
 [dev-dependencies]
 env_logger = "^0.6.1"
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git"}
-dogsdogsdogs = { path = "/Users/malte/Dev/eth/differential-dataflow/dogsdogsdogs" }
+#dogsdogsdogs = { path = "/Users/malte/Dev/eth/differential-dataflow/dogsdogsdogs" }

@@ -27,7 +27,17 @@ fn main() {
     env_logger::init();
 
     timely::execute_from_args(std::env::args(), |worker| {
-        register_logger::<Pair<u64, Duration>>(worker);
+        let args: Vec<String> = std::env::args().collect();
+        let load_balance: usize = match args[1].parse() {
+            Ok(n) => {
+                n
+            },
+            Err(_) => {
+                eprintln!("error: first argument not an integer");
+                return;
+            },
+        };
+        register_logger::<Pair<u64, Duration>>(worker, load_balance);
         let timer = std::time::Instant::now();
 
         let index = worker.index();
@@ -41,7 +51,7 @@ fn main() {
             // let mut vector: Vec<(usize, usize, usize)> = Vec::new();
 
             input_coll
-                .inspect(|(x, t, diff)| println!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .inspect(move |(x, t, diff)| println!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 .map(|x| (0, x))
                 .reduce(|_key, input, output| {
                     let mut sum = 0;
@@ -54,7 +64,7 @@ fn main() {
                     }
                     output.push((sum * 100, 1))
                 })
-                .inspect(|(x, t, diff)| println!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .inspect(move |(x, t, diff)| println!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 // .inner
                 // .unary(
                 //     Pipeline,
