@@ -47,8 +47,26 @@ pub mod pair {
     use timely::order::PartialOrder;
     impl<S: PartialOrder, T: PartialOrder> PartialOrder for Pair<S, T> {
         fn less_equal(&self, other: &Self) -> bool {
-            self.first.less_equal(&other.first) && self.second.less_equal(&other.second)
+            self.first.less_than(&other.first) ||
+               self.first.less_equal(&other.first) && self.second.less_equal(&other.second)
         }
+    }
+
+    use timely::order::TotalOrder;
+    impl<S: TotalOrder, T: TotalOrder> TotalOrder for Pair<S, T> {}
+
+    #[test]
+    fn compare_pairs() {
+        assert!(Pair::new(0, 0).less_equal(&Pair::new(0,0)));
+        assert!(Pair::new(0, 0).less_equal(&Pair::new(0,1)));
+        assert!(Pair::new(0, 0).less_equal(&Pair::new(1,0)));
+        assert!(Pair::new(0, 1).less_equal(&Pair::new(1,0)));
+        assert!(Pair::new(1, 0).less_equal(&Pair::new(1,0)));
+        assert!(Pair::new(1, 0).less_equal(&Pair::new(1,1)));
+        assert!(!Pair::new(1, 0).less_equal(&Pair::new(0,1)));
+
+        assert!(!Pair::new(1, 1).less_equal(&Pair::new(0,1000)));
+        assert!(Pair::new(0, 1000).less_equal(&Pair::new(1, 1)));
     }
 
     use timely::progress::timestamp::Refines;
