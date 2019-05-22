@@ -17,9 +17,9 @@ To try out SnailTrail, decide between online (via TCP) and offline (from file) m
 1. First, start a computation you would like to log: As example, `cargo run --example triangles <input file> <batch size> <load balance factor> <#computation workers>` from within `timely-adapter`.
 
     E.g., `cargo run --example triangles livejournal.graph 100 3 -w2` will load the `livejournal.graph` to use in the triangles computation, which is started with a batch size of 100. It is distributed over two workers, which will each write out events to three files.
-    
-    If you don't have the triangles computation ready, you can try a very basic log that is easily tweakable with `cargo run --example custom_operator 3 -- -w2`.
-2. Run SnailTrail to create a PAG: From `timely-snailtrail`, run `cargo run --example inspect <# SnailTrail workers> <# of (simulated) source computation workers> <from-file?>`. 
+
+    If you don't have the triangles computation ready, you can try a very basic log that is easily tweakable with `cargo run --example custom_operator 3 -w2`.
+2. Run SnailTrail to create a PAG: From `timely-snailtrail`, run `cargo run --example inspect <# SnailTrail workers> <# of (simulated) source computation workers> <from-file?>`.
 
     E.g., `cargo run --example inspect 2 6 f` will run SnailTrail with two workers, reading from the 6 files (`2 workers * 3 load balance factor`) we generated in step 1.
 3. This creates a PAG as a differential `Collection`, to log it and use it, tweak `timely-snailtrail/examples/inspect.rs`.
@@ -40,8 +40,8 @@ Further debug logging of the examples and SnailTrail is provided by Rust's `log`
 
 Check out the `Structure` section of this `README` for a high-level overview.
 
-The "magic" mostly happens at 
-- `timely-adapter/src/connect.rs` for (1) logging a computation and (2) connecting to it from SnailTrail, 
+The "magic" mostly happens at
+- `timely-adapter/src/connect.rs` for (1) logging a computation and (2) connecting to it from SnailTrail,
 - `timely-adapter/src/lib.rs` for the `LogRecord` creation,
 - `timely-snailtrail/src/pag.rs` for the `PAG` creation, and the
 - `inspect.rs`, `triangles.rs` and `custom_operator.rs` examples tying it all together.
