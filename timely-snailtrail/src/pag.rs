@@ -53,6 +53,12 @@ impl<'a> From<&'a LogRecord> for PagNode {
     }
 }
 
+impl std::fmt::Debug for PagNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}|{:?}@w{} (s{})", self.epoch, self.timestamp, self.worker_id, self.seq_no)
+    }
+}
+
 /// Information on how to traverse an edge. This is used e.g. in critical
 /// participation to decide whether an edge should be included in the critical
 /// path calculation. A `Block`ed edge can't be traversed (e.g. waiting activities)
@@ -67,7 +73,7 @@ pub enum TraversalType {
 }
 
 /// An edge in the activity graph
-#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq)]
+#[derive(Abomonation, Clone, PartialEq, Hash, Eq)]
 pub struct PagEdge {
     /// The source node
     pub source: PagNode,
@@ -93,6 +99,15 @@ impl PartialOrd for PagEdge {
     }
 }
 
+impl std::fmt::Debug for PagEdge {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?} -> {:?} | {:?} {:?}\t| oid: {:?}\t",
+               self.source, self.destination,
+               self.traverse, self.edge_type,
+               self.operator_id)
+    }
+}
+
 // @TODO currently, this creates a new pag per epoch, but never removes the old one.
 //       so state will continually grow and multiple pags exist side by side.
 // @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
@@ -113,6 +128,19 @@ where S::Timestamp: Lattice + Ord {
         .construct_pag(index)
 }
 
+/// Dump PAG to file
+pub trait DumpPAG<S: Scope<Timestamp = Pair<u64, Duration>>>
+where S::Timestamp: Lattice + Ord {
+    /// Dump PAG to file
+    fn dump_pag(&self) -> Collection<S, PagEdge, isize>;
+}
+
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> DumpPAG<S> for Collection<S, PagEdge, isize>
+where S::Timestamp: Lattice + Ord {
+    fn dump_pag(&self) -> Collection<S, PagEdge, isize> {
+        self.inspect(|(x, _, _)| println!("[\"{:?}\" \"{:?}\"] \"{:?}\"", x.source, x.destination, x.edge_type))
+    }
+}
 
 /// Operator that converts a Stream of LogRecords to a PAG
 pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>>
