@@ -28,7 +28,7 @@ fn main() {
     let load_balance_factor = std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
     let inspect = std::env::args().any(|x| x == "inspect");
 
-    timely::execute_from_args(std::env::args().skip(2), move |worker| {
+    timely::execute_from_args(std::env::args().skip(3), move |worker| {
         register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
 
         let timer = std::time::Instant::now();

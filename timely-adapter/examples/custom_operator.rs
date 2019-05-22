@@ -6,6 +6,9 @@
 //! Alternatively, [register_file_dumper](register_file_dumper) can be used to create a
 //! dump to be read back in by the [timely adapter](timely_adapter).
 
+#[macro_use]
+extern crate log;
+
 use differential_dataflow::input::InputSession;
 use differential_dataflow::operators::reduce::Reduce;
 
@@ -26,8 +29,10 @@ use std::time::Duration;
 fn main() {
     env_logger::init();
 
-    timely::execute_from_args(std::env::args(), |worker| {
-        register_logger::<Pair<u64, Duration>>(worker);
+    let load_balance_factor = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
+
+    timely::execute_from_args(std::env::args().skip(1), move |worker| {
+        register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
         let timer = std::time::Instant::now();
 
         let index = worker.index();
@@ -41,7 +46,7 @@ fn main() {
             // let mut vector: Vec<(usize, usize, usize)> = Vec::new();
 
             input_coll
-                .inspect(|(x, t, diff)| println!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .inspect(move |(x, t, diff)| info!("1: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 .map(|x| (0, x))
                 .reduce(|_key, input, output| {
                     let mut sum = 0;
@@ -54,7 +59,7 @@ fn main() {
                     }
                     output.push((sum * 100, 1))
                 })
-                .inspect(|(x, t, diff)| println!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
+                .inspect(move |(x, t, diff)| info!("2: w{:?} - {:?} @ {:?}d{:?}", index, x, t, diff))
                 // .inner
                 // .unary(
                 //     Pipeline,
@@ -105,7 +110,7 @@ fn main() {
             while probe.less_than(input.time()) {
                 worker.step();
             }
-            println!("{:?}\tRound {} complete", timer.elapsed(), round);
+            info!("{:?}\tRound {} complete", timer.elapsed(), round);
 
             if let Some(timely_logger) = &timely_logger {
                 timely_logger.log(TimelyEvent::Text(format!(
