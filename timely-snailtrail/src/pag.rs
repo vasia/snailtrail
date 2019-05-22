@@ -18,12 +18,16 @@ use logformat::pair::Pair;
 use timely_adapter::{connect::Replayer, create_lrs};
 
 /// A node in the PAG
-#[derive(Abomonation, Clone, Debug, PartialEq, Hash, Eq, Copy)]
+#[derive(Abomonation, Clone, PartialEq, Hash, Eq, Copy)]
 pub struct PagNode {
     /// Timestamp of the event (also a unique identifier!)
     pub timestamp: logformat::Timestamp,
     /// Unique ID of the worker the event belongs to
     pub worker_id: logformat::Worker,
+    /// Epoch of PagNode
+    pub epoch: u64,
+    /// seq_no of PagNode
+    pub seq_no: u64,
 }
 
 impl Ord for PagNode {
@@ -43,6 +47,8 @@ impl<'a> From<&'a LogRecord> for PagNode {
         PagNode {
             timestamp: record.timestamp,
             worker_id: record.local_worker,
+            epoch: record.epoch,
+            seq_no: record.seq_no,
         }
     }
 }
