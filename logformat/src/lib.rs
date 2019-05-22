@@ -282,7 +282,6 @@ impl PartialOrd for LogRecord {
     }
 }
 
-
 impl std::fmt::Debug for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "e{}@t{:?}\t(s{}@w{}) | {:?} {:?} | to {:?} | op {:?} | ch {:?} | corr {:?}\t",
@@ -290,4 +289,127 @@ impl std::fmt::Debug for LogRecord {
                self.event_type, self.activity_type,
                self.remote_worker, self.operator_id, self.channel_id, self.correlator_id)
     }
+}
+
+impl LogRecord {
+    /// Serializes a `LogRecord` to msgpack
+    pub fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let remote_worker = if let Some(x) = self.remote_worker { x as i64 } else { -1 };
+        let operator_id = if let Some(x) = self.operator_id { x as i64 } else { -1 };
+        let channel_id = if let Some(x) = self.channel_id { x as i64 } else { -1 };
+        let correlator_id = if let Some(x) = self.correlator_id { x as i64 } else { -1 };
+
+        msgpack::encode::write_uint(writer, self.seq_no)?;
+        msgpack::encode::write_uint(writer, self.epoch)?;
+        msgpack::encode::write_uint(writer, self.timestamp.as_secs())?;
+        msgpack::encode::write_uint(writer, self.timestamp.subsec_nanos().into())?;
+        msgpack::encode::write_uint(writer, self.local_worker)?;
+        msgpack::encode::write_uint(writer, self.activity_type.to_u64().unwrap())?;
+        msgpack::encode::write_uint(writer, self.event_type.to_u64().unwrap())?;
+        msgpack::encode::write_sint(writer, remote_worker)?;
+        msgpack::encode::write_sint(writer, operator_id)?;
+        msgpack::encode::write_sint(writer, channel_id)?;
+        msgpack::encode::write_sint(writer, correlator_id)?;
+        Ok(())
+    }
+
+    /// Deserializes a `LogRecord` to msgpack
+    pub fn read<R: Read>(reader: &mut R) -> Result<LogRecord, LogReadError> {
+        // TODO: this method should return the error cause as an enum so that the caller can test
+        // whether failures were due to having reached the end of the file (break), due to invalid
+        // data (show partially-decoded data), or some other reason.
+
+        let seq_no = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode seq_no: {:?}", read_err))?;
+        let epoch = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode epoch: {:?}", read_err))?;
+        let ts_secs = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode ts_secs: {:?}", read_err))?;
+        let ts_nanos = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode ts_nanos: {:?}", read_err))?;
+        let local_worker = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode local_worker: {:?}", read_err))?;
+        let activity_type = ActivityType::from_u64(msgpack::decode::read_int(reader).map_err(|read_err| format!("{:?}", read_err))?)
+                    .ok_or("invalid value for activity_type")?;
+        let event_type = EventType::from_u64(msgpack::decode::read_int(reader).map_err(|read_err| format!("{:?}", read_err))?)
+                    .ok_or("invalid value for event_type")?;
+        let remote_worker =
+            {
+                let val: i64 = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode remote_worker: {:?}", read_err))?;
+                if val == -1 { None } else { Some(val as u64) }
+            };
+        let operator_id = {
+            let val: i64 =
+                msgpack::decode::read_int(reader)
+                    .map_err(|read_err| format!("cannot decode operator_id: {:?}", read_err))?;
+            if val == -1 { None } else { Some(val as u64) }
+        };
+        let channel_id = {
+            let val: i64 =
+                msgpack::decode::read_int(reader)
+                    .map_err(|read_err| format!("cannot decode channel_id: {:?}", read_err))?;
+            if val == -1 { None } else { Some(val as u64) }
+        };
+        let correlator_id =
+            {
+                let val: i64 = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode correlator_id: {:?}", read_err))?;
+                if val == -1 { None } else { Some(val as u64) }
+            };
+
+        Ok(LogRecord {
+            seq_no,
+            epoch,
+            timestamp: std::time::Duration::new(ts_secs, ts_nanos),
+            local_worker,
+            activity_type,
+            event_type,
+            correlator_id,
+            remote_worker,
+            operator_id,
+            channel_id,
+        })
+    }
+}
+
+#[test]
+fn logrecord_roundtrip() {
+    // one record
+    let mut v = Vec::with_capacity(2048);
+    let r = LogRecord {
+        seq_no: 12345,
+        epoch: 4,
+        timestamp: std::time::Duration::new(2, 23334),
+        local_worker: 123,
+        activity_type: ActivityType::DataMessage,
+        event_type: EventType::Start,
+        correlator_id: Some(12),
+        remote_worker: Some(15),
+        operator_id: Some(3),
+        channel_id: Some(12),
+    };
+    r.write(&mut v).unwrap();
+    let r_out = LogRecord::read(&mut &v[..]).unwrap();
+    assert!(r == r_out);
+    let r2 = {
+        let mut r2 = r.clone();
+        r2.local_worker = 16;
+        r2.correlator_id = None;
+        r2
+    };
+    println!("{:?}", r2);
+    let r3 = {
+        let mut r3 = r.clone();
+        r3.event_type = EventType::End;
+        r3
+    };
+    // multiple records
+    println!("### {:?}", v);
+    r2.write(&mut v).unwrap();
+    println!("{:?}", v);
+    r3.write(&mut v).unwrap();
+    println!("{:?}", v);
+    let reader = &mut &v[..];
+    assert!(r == LogRecord::read(reader).unwrap());
+    println!(">> {:?}", reader);
+    let r2_out = LogRecord::read(reader);
+    println!("{:?}", r2_out);
+    assert!(r2 == r2_out.unwrap());
+    println!(">> {:?}", reader);
+    assert!(r3 == LogRecord::read(reader).unwrap());
+    println!(">> {:?}", reader);
 }
