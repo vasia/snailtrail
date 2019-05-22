@@ -118,18 +118,21 @@ where S::Timestamp: Lattice + Ord {
     fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize>;
     /// Helper to create a `PagEdge` from two `LogRecord`s
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
-    // /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
-    // fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
-    // /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
+    /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
+    fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
+    /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
+    fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S, LogRecord, isize>
 where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize> {
 use timely::dataflow::operators::inspect::Inspect;
-        self.make_local_edges(index)
-        // .concat(&self.make_data_edges())
+        use differential_dataflow::operators::consolidate::Consolidate;
+        self
+            .make_local_edges(index)
+            .concat(&self.make_control_edges())
+            .concat(&self.make_data_edges())
     }
 
     // this should scale with epoch size, as it can update incrementally
@@ -176,47 +179,46 @@ use timely::dataflow::operators::inspect::Inspect;
         }
     }
 
-    // fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
-    //     let sent = self
-    //         .filter(|x| {
-    //             x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
-    //         })
-    //         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
+    fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
+        let sent = self
+            .filter(|x| {
+                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
+            })
+            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
-    //     let received = self
-    //         .filter(|x| {
-    //             x.activity_type == ActivityType::ControlMessage
-    //                 && x.event_type == EventType::Received
-    //         })
-    //         .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+        let received = self
+            .filter(|x| {
+                x.activity_type == ActivityType::ControlMessage
+                    && x.event_type == EventType::Received
+            })
+            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
-    //     sent.join(&received)
-    //         .map(|(_key, (from, to))| PagEdge {
-    //             source: PagNode::from(&from),
-    //             destination: PagNode::from(&to),
-    //             edge_type: ActivityType::ControlMessage,
-    //             operator_id: None,
-    //             traverse: TraversalType::Unbounded,
-    //         })
-    // }
+        sent.join(&received)
+            .map(|(_key, (from, to))| PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: ActivityType::ControlMessage,
+                operator_id: None,
+                traverse: TraversalType::Unbounded,
+            })
+    }
 
-    // @TODO: use channel information to reposition data message in front of the operator it was intended for
-    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
-    //     let sent = self
-    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-    //         .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+    fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
+        let sent = self
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
-    //     let received = self
-    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-    //         .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x));
+        let received = self
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x));
 
-    //     sent.join(&received)
-    //         .map(|(_key, (from, to))| PagEdge {
-    //             source: PagNode::from(&from),
-    //             destination: PagNode::from(&to),
-    //             edge_type: ActivityType::DataMessage,
-    //             operator_id: None, // could be used to store op info
-    //             traverse: TraversalType::Unbounded
-    //         })
-    // }
+        sent.join(&received)
+            .map(|(_key, (from, to))| PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: ActivityType::DataMessage,
+                operator_id: None, // @TODO could be used to store op info
+                traverse: TraversalType::Unbounded
+            })
+    }
 }

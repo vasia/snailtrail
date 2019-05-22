@@ -266,6 +266,8 @@ pub struct LogRecord {
     pub operator_id: Option<OperatorId>,
     /// Unique id for the channel in the dataflow. This only applies for some event types, e.g. data / control messages.
     pub channel_id: Option<ChannelId>,
+    /// correlates remote events belonging together
+    pub correlator_id: Option<u64>
 }
 
 impl Ord for LogRecord {
@@ -283,9 +285,9 @@ impl PartialOrd for LogRecord {
 
 impl std::fmt::Debug for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "e{}@t{:?} (s{}@w{}) | {:?} {:?} |\t to {:?} \t op {:?} \t ch {:?}",
+        write!(f, "e{}@t{:?}\t(s{}@w{}) | {:?} {:?} | to {:?} | op {:?} | ch {:?} | corr {:?}\t",
                self.epoch, self.timestamp, self.seq_no, self.local_worker,
                self.event_type, self.activity_type,
-               self.remote_worker, self.operator_id, self.channel_id)
+               self.remote_worker, self.operator_id, self.channel_id, self.correlator_id)
     }
 }

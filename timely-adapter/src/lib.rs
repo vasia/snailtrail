@@ -133,6 +133,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                         remote_worker: None,
                         operator_id: Some(event.id as u64),
                         channel_id: None,
+                        correlator_id: None,
                     },
                     time,
                     1,
@@ -163,6 +164,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                         remote_worker,
                         operator_id: None,
                         channel_id: Some(event.channel as u64),
+                        correlator_id: Some(event.seq_no as u64),
                     },
                     time,
                     1,
@@ -195,6 +197,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                         remote_worker,
                         operator_id: None,
                         channel_id: Some(event.channel as u64),
+                        correlator_id: Some(event.seq_no as u64),
                     },
                     time,
                     1,
@@ -226,24 +229,11 @@ where S::Timestamp: Lattice + Ord {
     ) -> Collection<S, LogRecord, isize> {
         // only operates events, keyed by addr
         let operates = stream
-            .unary_frontier(Pipeline, "operates_filter", |_capability, _info| {
-                let mut buffer = Vec::new();
-
-                move |input, output| {
-                    input.for_each(|cap, data| {
-                        let mut session = output.session(&cap);
-
-                        data.swap(&mut buffer);
-                        for (_epoch, _seq_no, (t, wid, x)) in buffer.drain(..) {
-                            // according to contract defined in connect.rs, dataflow setup
-                            // is collapsed into data-t=1ns
-                            if t.as_nanos() == 0 {
-                                if let Operates(event) = x {
-                                    session.give(((event.addr, (wid as u64, Some(event.id as u64))), cap.time().clone(), 1));
-                                }
-                            }
-                        }
-                    })
+            .flat_map(|(_, _, (_t, wid, x))| {
+                if let Operates(x) = x {
+                    Some(((x.addr, (wid as u64, Some(x.id as u64))), Default::default(), 1))
+                } else {
+                    None
                 }
             })
             .as_collection();

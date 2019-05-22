@@ -343,7 +343,6 @@ unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + D
                             Messages(e) if e.source != e.target && e.target == wid => {
                                 seq_no += 1;
 
-                                // @TODO: what about timestamp?
                                 let (last_epoch, last_seq, last_event) = buffer.pop()
                                     .expect("non-empty buffer required");
 
