@@ -36,7 +36,7 @@ To try out SnailTrail, decide between online (via TCP) and offline (from file) m
 
 Further debug logging of the examples and SnailTrail is provided by Rust's `log` and `env_log` crates. Passing `RUST_LOG=info` (or `trace`) as env variable when running examples should write out further logging to your `std::out`.
 
-There's also a WIP PAG visualization that can be used for sanity checking / manually identifiying patterns. To use it, run `cargo run viz <# SnailTrail workers> <# source computation workers> <output path>.html <from-file?>`. After the computation has finished, press enter to create a `<output path>.html` file which contains an interactive PAG visualization.
+There's also a WIP PAG visualization that can be used for sanity checking / manually identifiying patterns. To use it, run `cargo run viz <# SnailTrail workers> <# source computation workers> <output path>.html <from-file?>` from `timely-snailtrail`. After the computation has finished, press enter to create a `<output path>.html` file which contains an interactive PAG visualization.
 
 ### Show me the code!
 
