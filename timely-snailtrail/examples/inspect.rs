@@ -37,7 +37,7 @@ fn main() {
 fn inspector(config: Config) {
     // creates one socket per worker in the computation we're examining
     let sockets = if !config.from_file {
-        Some(open_sockets(config.worker_peers))
+        Some(open_sockets(config.source_peers))
     } else {
         None
     };

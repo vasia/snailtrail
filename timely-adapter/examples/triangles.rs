@@ -29,6 +29,7 @@ fn main() {
     let inspect = std::env::args().any(|x| x == "inspect");
 
     timely::execute_from_args(std::env::args().skip(3), move |worker| {
+        println!("triangles with w{}, lbf {}", worker.peers(), load_balance_factor);
         register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
 
         let timer = std::time::Instant::now();
@@ -133,7 +134,8 @@ fn main() {
                 while probe.less_than(input.time()) {
                     worker.step();
                 }
-                info!("{:?}\tRound {} complete", timer.elapsed(), index);
+                info!("w{} {:?}\tRound {} complete", worker.index(), timer.elapsed(), index);
+                info!("w{} [st] closed times before: {:?}", worker.index(), input.time());
 
                 if let Some(timely_logger) = &timely_logger {
                     timely_logger.log(TimelyEvent::Text(format!(

@@ -99,7 +99,6 @@ pub fn render(output_path: &String, worker_handles: WorkerGuards<()>, pag: mpsc:
 
     let mut file = std::fs::File::create(output_path).map_err(|e| panic!(format!("io error: {}", e))).expect("could not create file");
 
-
     expect_write(writeln!(file, "<script type=\"text/javascript\">"));
     expect_write(writeln!(file, "let pag = ["));
 
