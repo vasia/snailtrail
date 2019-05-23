@@ -72,7 +72,11 @@ pub fn open_sockets(count: usize) -> Arc<Mutex<Vec<Option<TcpStream>>>> {
     let listener = TcpListener::bind("127.0.0.1:8000").unwrap();
     Arc::new(Mutex::new(
         (0..count)
-            .map(|_| Some(listener.incoming().next().unwrap().unwrap()))
+            .map(|_| {
+                let mut socket = listener.incoming().next().unwrap().unwrap();
+                socket.set_nonblocking(true);
+                Some(socket)
+             })
             .collect::<Vec<_>>(),
     ))
 }
