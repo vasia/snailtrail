@@ -36,7 +36,6 @@ use differential_dataflow::{
     collection::{AsCollection, Collection},
     operators::{consolidate::Consolidate, join::Join, reduce::Threshold},
 };
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::lattice::Lattice;
 

@@ -1,18 +1,20 @@
-use timely_adapter::{
-    connect::{make_replayers, open_sockets},
-};
-
 use timely_snailtrail::{pag, Config};
+use timely_snailtrail::pag::DumpPAG;
 
-use timely::dataflow::{
-    operators::{capture::replay::Replay, probe::Probe},
-    ProbeHandle,
-    Scope
-};
+use timely::dataflow::ProbeHandle;
+use timely::dataflow::operators::probe::Probe;
+use timely::dataflow::operators::capture::replay::Replay;
+use timely::dataflow::operators::capture::EventReader;
+
 
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 
 use logformat::pair::Pair;
+
+use timely_diag_connect::receive as connect;
+use timely_diag_connect::receive::ReplaySource;
 
 fn main() {
     env_logger::init();
@@ -36,10 +38,16 @@ fn main() {
 
 fn inspector(config: Config) {
     // creates one socket per worker in the computation we're examining
-    let sockets = if !config.from_file {
-        Some(open_sockets(config.source_peers))
+    let replay_source = if config.from_file {
+        let files = (0 .. config.source_peers)
+            .map(|idx| format!("{}.dump", idx))
+            .map(|path| Some(PathBuf::from(path)))
+            .collect::<Vec<_>>();
+
+        ReplaySource::Files(Arc::new(Mutex::new(files)))
     } else {
-        None
+        let sockets = connect::open_sockets("127.0.0.1".parse().expect("couldn't parse IP"), 8000, config.source_peers).expect("couldn't open sockets");
+        ReplaySource::Tcp(Arc::new(Mutex::new(sockets)))
     };
 
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {
@@ -52,12 +60,8 @@ fn inspector(config: Config) {
         }
 
         // read replayers from file (offline) or TCP stream (online)
-        let replayers = make_replayers(
-            worker.index(),
-            config.worker_peers,
-            config.source_peers,
-            sockets.clone(),
-        );
+        let readers: Vec<EventReader<_, timely_adapter::connect::CompEvent, _>> =
+            connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
             pag::create_pag(scope, replayers, index)
@@ -72,7 +76,7 @@ fn inspector(config: Config) {
             probe.with_frontier(|f| {
                 let f = f.to_vec();
                 if f != curr_frontier {
-                    println!("w{} frontier: {:?} | {:?}", index, f, timer2.elapsed().as_millis());
+                    println!("w{} frontier: {:?} | took {:?}ms", index, f, timer2.elapsed().as_millis());
                     timer2 = std::time::Instant::now();
                     curr_frontier = f;
                 }
