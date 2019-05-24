@@ -20,10 +20,12 @@ use std::time::Duration;
 static HTML: &str = include_str!("../../html/index.html");
 
 fn main() {
-    let worker_peers = std::env::args().nth(2).expect("1st").parse::<usize>().expect("no num");
-    let source_peers = std::env::args().nth(3).expect("2nd").parse::<usize>().expect("no num2");
-    let output_path = std::env::args().nth(4).expect("path");
-    let from_file = if let Some(_) = std::env::args().nth(5) {
+    let mut args = std::env::args();
+    let _ = args.next().unwrap();
+    let worker_peers = args.next().expect("no worker peers").parse::<usize>().expect("invalid worker peers");
+    let source_peers = args.next().expect("no source peers").parse::<usize>().expect("invalid source peers");
+    let output_path = args.next().expect("missing output path");
+    let from_file = if let Some(_) = args.next() {
         true
     } else {
         false
