@@ -12,5 +12,5 @@ abomonation = "0.7"
 abomonation_derive = "0.3"
 json = "0.11.12"
 clap = "^2.32"
-timely = { git = "https://github.com/timelydataflow/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/timelydataflow/differential-dataflow.git" }
+timely = "0.9"
+differential-dataflow = "0.9"

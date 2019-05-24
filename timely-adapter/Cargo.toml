@@ -5,9 +5,8 @@ authors = ["Malte Sandstede <samalt@ethz.ch"]
 edition = "2018"
 
 [dependencies]
-timely = { git = "https://github.com/timelydataflow/timely-dataflow.git" }
-# differential-dataflow = "^0.9"
-differential-dataflow = { git = "https://github.com/timelydataflow/differential-dataflow.git" }
+timely = "0.9"
+differential-dataflow = "^0.9"
 logformat = { version = "0.2.0", path = "../logformat" }
 log = "^0.4.0"
 abomonation = "0.7"
@@ -16,4 +15,4 @@ abomonation_derive = "0.3"
 [dev-dependencies]
 env_logger = "^0.6.1"
 graph_map = { git = "https://github.com/frankmcsherry/graph-map.git"}
-dogsdogsdogs = { git = "https://github.com/timelydataflow/differential-dataflow/" }
+dogsdogsdogs = { git = "https://github.com/timelydataflow/differential-dataflow/", tag="v0.9.0"}

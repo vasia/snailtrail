@@ -10,8 +10,9 @@ log = "^0.4.0"
 itertools = "^0.8"
 logformat = { version = "0.2.0", path = "../logformat" }
 timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }
-timely = { git = "https://github.com/timelydataflow/timely-dataflow.git" }
-differential-dataflow = { git = "https://github.com/timelydataflow/differential-dataflow.git" }
+timely = "0.9"
+differential-dataflow = "0.9"
+timely-diag-connect = { git = "https://github.com/TimelyDataflow/diagnostics", branch = "receive" }
 
 [dev-dependencies]
 env_logger = "^0.6.1"
