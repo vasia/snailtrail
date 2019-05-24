@@ -23,13 +23,19 @@ fn main() {
     env_logger::init();
 
     // snag a filename to use for the input graph.
-    let filename = std::env::args().nth(1).unwrap();
-    let batching = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
-    let load_balance_factor = std::env::args().nth(3).unwrap().parse::<usize>().unwrap();
-    let inspect = std::env::args().any(|x| x == "inspect");
+    let mut args = std::env::args();
 
-    timely::execute_from_args(std::env::args().skip(3), move |worker| {
-        println!("triangles with w{}, lbf {}", worker.peers(), load_balance_factor);
+    println!("CLAs: {:?}", args);
+
+    let _ = args.next(); // bin name
+    let filename = args.next().expect("file name");
+    let batching = args.next().expect("missing batching").parse::<usize>().unwrap();
+    let load_balance_factor = args.next().expect("missing lbf").parse::<usize>().unwrap();
+    let _ = args.next(); // --
+
+    let args = args.collect::<Vec<_>>();
+    timely::execute_from_args(args.clone().into_iter(), move |worker| {
+        println!("triangles with args: {:?}, w{}, lbf {}", args, worker.peers(), load_balance_factor);
         register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
 
         let timer = std::time::Instant::now();
@@ -99,10 +105,7 @@ fn main() {
                     changes1.concat(&changes2).concat(&changes3).leave()
                 });
 
-            triangles
-                .filter(move |_| inspect)
-                .inspect(|x| info!("\tTriangle: {:?}", x))
-                .probe_with(&mut probe);
+            triangles.probe_with(&mut probe);
 
             edges_input
         });
