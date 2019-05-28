@@ -223,10 +223,6 @@ fn main() {
                 )));
             }
         }
-
-        if let Some(timely_logger) = &timely_logger {
-            timely_logger.log(TimelyEvent::Text("[st] computation done".to_string()));
-        }
     }).unwrap(); // asserts error-free execution;
 }
 

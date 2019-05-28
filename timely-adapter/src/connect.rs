@@ -67,7 +67,12 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
             })
             .collect::<Vec<_>>();
 
-        unsafe { log_pag(worker, writers); }
+        let mut pag_logger = PAGLogger::new(worker.index(), writers);
+        worker
+            .log_register()
+            .insert::<TimelyEvent, _>("timely", move |_time, data| {
+                pag_logger.publish_batch(data);
+            });
     } else {
         let writers = (0 .. load_balance_factor).map(|i| {
             let name = format!("../timely-snailtrail/{:?}.dump", (worker.index() + i * worker.peers()));
@@ -80,7 +85,12 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
             EventWriter::<T, _, _>::new(file)
         }).collect::<Vec<_>>();
 
-        unsafe { log_pag(worker, writers); }
+        let mut pag_logger = PAGLogger::new(worker.index(), writers);
+        worker
+            .log_register()
+            .insert::<TimelyEvent, _>("timely", move |_time, data| {
+                pag_logger.publish_batch(data);
+            });
     }
 }
 
@@ -122,232 +132,206 @@ impl NextEpoch for Pair<u64, Duration> {
     }
 }
 
-/// Status of logged computation. Changed by log message
-/// `[st] computation done`.
-#[derive(Eq, PartialEq)]
-enum ComputationStatus {
-    /// Computation is ongoing
-    Ongoing,
-    /// marker that computation has ended
-    WrappingUp,
-    /// apabilities have been dropped; no further messages
-    /// should get sent.
-    WrappedUp
-}
+const MAX_FUEL: usize = 512;
 
 // @TODO: for triangles query with round size == 1, the computation is slowed down by TCP.
 //        A reason for this might be the overhead in creating TCP packets, so it might be
 //        worthwhile investigating the reintroduction of batching for very small computation
 //        rounds.
-/// Registers a `TimelyEvent` logger which outputs relevant log events for PAG construction.
+/// Used by a `TimelyEvent` logger to output relevant log events for PAG construction.
+/// Relevant means:
 /// 1. Only relevant events are written to `writer`.
 /// 2. Using `Text` events as markers, logged events are written out at one time per epoch.
 /// 3. Dataflow setup is collapsed into t=(0, 0ns) so that peel_operators is more efficient.
 /// 4. If the computation is bounded, capabilities will be dropped correctly at the end of
 ///    computation.
 ///
-/// This function is marked `unsafe` as it relies on an implicit contract with the
-/// logged computation:
+/// The PAGLogger relies on the following contract to function properly:
 /// 1. After `advance_to(0)`, the beginning of computation should be logged:
 ///    `"[st] begin computation at epoch: {:?}"`
 /// 2. After each epoch's `worker.step()`, the epoch progress should be logged:
 ///    `"[st] closed times before: {:?}"`
-/// 3. (optional) After the last round, the end of the computation should be logged:
-///    `"[st] computation done"`
 /// Failing to do so might have unexpected effects on the PAG creation.
-unsafe fn log_pag<W: 'static + Write, T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation>(
-    worker: &mut Worker<Generic>,
-    mut writers: Vec<ReplayWriter<T, W>>,
-) {
-    // initialized to default, dropped as soon as the
-    // computation starts running.
-    let mut curr_cap: T = Default::default();
-
-    // first real frontier, used for setting up the computation
-    // (`Operates` et al.).
-    let mut next_cap: T = Default::default();
-
-    // worker-unique identifier for every message sent by computation
-    let mut seq_no = 0;
-
-    // buffer of relevant events for a batch. As a batch only ever belongs
-    // to a single epoch (epoch markers only appear at the beginning of a batch),
-    // we don't have to keep track of times for batch elements.
-    let mut buffer = Vec::new();
-
-    let mut status = ComputationStatus::Ongoing;
-
-    // Advances system time if it hasn't yet been advanced
-    // for the current progress batch.
-    let mut tick_sys = true;
-
-    // If a computation's epoch size exceeds `MAX_FUEL` events are batched
-    // into multiple processing times within that epoch.
-    // Received data messages don't use up fuel to avoid separating
-    // them from the schedules event that is used to reorder them.
-    const MAX_FUEL: usize = 512;
-    let mut fuel = MAX_FUEL;
-
-    let mut curr_writer = 0;
-
-    // for debugging
-    let worker_index = worker.index();
-
-    worker
-        .log_register()
-        .insert::<TimelyEvent, _>("timely", move |time, data| {
-            match status {
-                ComputationStatus::Ongoing => {
-                    for (t, wid, x) in data.drain(..) {
-                        match &x {
-                            // Text events advance epochs, start and end logging
-                            Text(e) => {
-                                info!("w{}@{:?} text event: {}", worker_index, curr_cap, e);
-
-                                // Text events mark ends of epochs in the computation.
-                                next_cap.tick_epoch(&t);
-
-                                info!("flushing to {}", curr_writer);
-                                flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
-                                             &mut writers[curr_writer],
-                                             &mut curr_cap,
-                                             worker_index);
-                                curr_writer = (curr_writer + 1) % writers.len();
-                                fuel = MAX_FUEL;
-                                tick_sys = true;
-
-                                if e.starts_with("[st] computation done") {
-                                    status = ComputationStatus::WrappingUp;
-                                    break;
-                                }
-                            }
-                            Operates(_) | Channels(_) => {
-                                fuel -= 1;
-                                seq_no += 1;
-
-                                // all operates events should happen in the initialization epoch,
-                                // i.e., before any Text event epoch markers have been observed
-                                assert!(next_cap == curr_cap && curr_cap == Default::default());
-
-                                buffer.push((curr_cap.get_epoch(), seq_no, (Default::default(), wid, x)));
-                            }
-                            Schedule(e) => {
-                                // extend buffer size by 1 to avoid breaking up repositioning of
-                                // schedule start events and consequent data messages
-                                if fuel > 1 || e.start_stop == StartStop::Stop {
-                                    fuel -= 1;
-                                }
-                                seq_no += 1;
-
-                                if tick_sys {
-                                    next_cap.tick_sys(&t);
-                                    tick_sys = false;
-                                    advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
-                                }
-
-                                buffer.push((curr_cap.get_epoch(), seq_no, (t, wid, x)));
-                            }
-                            // Remote progress events
-                            Progress(e) if e.is_send || e.source != wid => {
-                                fuel -= 1;
-                                seq_no += 1;
-                                if tick_sys {
-                                    next_cap.tick_sys(&t);
-                                    tick_sys = false;
-                                    advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
-                                }
-                                buffer.push((curr_cap.get_epoch(), seq_no, (t, wid, x)));
-                            }
-                            // Remote data receive events
-                            Messages(e) if e.source != e.target && e.target == wid => {
-                                seq_no += 1;
-
-                                let (last_epoch, last_seq, last_event) = buffer.pop()
-                                    .expect("non-empty buffer required");
-
-                                assert!(if let Schedule(e) = &last_event.2 {e.start_stop == StartStop::Start}
-                                        else {false});
-
-                                // Reposition received remote data message:
-                                // 1. push the data message with previous' seq_no
-                                buffer.push((curr_cap.get_epoch(), last_seq, (t, wid, x)));
-                                // 2. push the schedule event
-                                buffer.push((last_epoch, seq_no, last_event));
-                            }
-                            // remote data send events
-                            Messages(e) if e.source != e.target => {
-                                fuel -= 1;
-                                seq_no += 1;
-                                if tick_sys {
-                                    next_cap.tick_sys(&t);
-                                    tick_sys = false;
-                                    advance_cap(&mut writers, &mut next_cap, &mut curr_cap, worker_index);
-                                }
-                                buffer.push((curr_cap.get_epoch(), seq_no, (t, wid, x)));
-                            }
-                            _ => {}
-                        }
-
-                        if fuel == 0 {
-                            info!("flushing to {}", curr_writer);
-                            flush_buffer(std::mem::replace(&mut buffer, Vec::new()),
-                                         &mut writers[curr_writer],
-                                         &mut curr_cap,
-                                         worker_index);
-                            curr_writer = (curr_writer + 1) % writers.len();
-                            fuel = MAX_FUEL;
-                            tick_sys = true;
-                        }
-                    }
-                }
-                ComputationStatus::WrappingUp => {
-                    info!("w{}@ep{:?}: timely logging wrapping up", worker_index, curr_cap);
-                    assert!(buffer.len() == 0, "flush buffer before wrap up!");
-
-                    // free capabilities
-                    for writer in writers.iter_mut() {
-                        writer.push(Event::Progress(vec![(curr_cap.clone(), -1)]));
-                    }
-
-                    status = ComputationStatus::WrappedUp;
-                }
-                ComputationStatus::WrappedUp => {}
-            };
-        });
+struct PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation, W: 'static + Write {
+    /// Writers log messages can be written to.
+    writers: Vec<ReplayWriter<T, W>>,
+    /// Current writer used to log messages to. Used for load balancing
+    /// with the `load_balance_factor`
+    curr_writer: usize,
+    /// Cap time at which current events are written.
+    curr_cap: T,
+    /// Next cap time
+    next_cap: T,
+    /// Worker-unique identifier for every message sent by computation
+    seq_no: u64,
+    /// Buffer of relevant events for a batch. As a batch only ever belongs
+    /// to a single epoch (epoch markers only appear at the beginning of a batch),
+    /// we don't have to keep track of times for batch elements.
+    buffer: Vec<CompEvent>,
+    /// Advances system time if it hasn't yet been advanced
+    /// for the current progress batch.
+    tick_sys: bool,
+    /// If a computation's epoch size exceeds `MAX_FUEL` events are batched
+    /// into multiple processing times within that epoch.
+    /// Received data messages don't use up fuel to avoid separating
+    /// them from the schedules event that is used to reorder them.
+    fuel: usize,
+    /// For debugging (tracks this logger's worker index)
+    worker_index: usize,
+    /// For debugging (tracks per-epoch messages this pag logger received)
+    overall_messages: u64,
+    /// For debugging (tracks per-epoch messages this pag logger wrote)
+    pag_messages: u64,
 }
 
-/// Flushes the buffer The buffer is written out at `curr_cap`.
-fn flush_buffer<W, T>(buffer: Vec<CompEvent>,
-                      writer: &mut ReplayWriter<T, W>,
-                      curr_cap: &mut T,
-                      index: usize)
-where
-    W: 'static + Write,
-    T: Abomonation + Clone + Debug {
+impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation, W: 'static + Write {
+    /// Creates a new PAG Logger.
+    pub fn new(worker_index: usize, writers: Vec<ReplayWriter<T, W>>) -> Self {
+        PAGLogger {
+            writers,
+            curr_writer: 0,
+            curr_cap: Default::default(),
+            next_cap: Default::default(),
+            seq_no: 0,
+            buffer: Vec::new(),
+            tick_sys: true,
+            fuel: MAX_FUEL,
+            worker_index,
+            overall_messages: 0,
+            pag_messages: 0,
+        }
+    }
 
-    if buffer.len() > 0 {
-        info!("w{} flush@{:?}: count: {}", index, curr_cap, buffer.len());
-        writer.push(Event::Messages(curr_cap.clone(), buffer));
+    /// Publishes a batch of logged events and advances the capability.
+    pub fn publish_batch(&mut self, data: &mut Vec<(Duration, WorkerIdentifier, TimelyEvent)>) {
+        for (t, wid, x) in data.drain(..) {
+            self.overall_messages += 1;
+
+            match &x {
+                // Text events advance epochs, start and end logging
+                Text(e) => {
+                    info!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
+                    info!("w{}@{:?}, overall: {}, pag: {}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages);
+                    self.overall_messages = 0;
+                    self.pag_messages = 0;
+
+                    self.next_cap.tick_epoch(&t);
+
+                    self.flush_buffer();
+                }
+                Operates(_) | Channels(_) => {
+                    self.pag_messages += 1;
+                    // all operates events should happen in the initialization epoch,
+                    // i.e., before any Text event epoch markers have been observed
+                    assert!(self.next_cap == self.curr_cap && self.curr_cap == Default::default());
+
+                    self.fuel -= 1;
+                    self.seq_no += 1;
+                    self.buffer.push((self.curr_cap.get_epoch(), self.seq_no, (Default::default(), wid, x)));
+                }
+                Schedule(e) => {
+                    self.pag_messages += 1;
+                    // extend buffer size by 1 to avoid breaking up repositioning of
+                    // schedule start events and consequent data messages
+                    if self.fuel > 1 || e.start_stop == StartStop::Stop {
+                        self.fuel -= 1;
+                    }
+                    self.seq_no += 1;
+
+                    if self.tick_sys {
+                        self.advance_cap(&t);
+                    }
+
+                    self.buffer.push((self.curr_cap.get_epoch(), self.seq_no, (t, wid, x)));
+                }
+                // Remote progress events
+                Progress(e) if e.is_send || e.source != wid => {
+                    self.pag_messages += 1;
+                    self.fuel -= 1;
+                    self.seq_no += 1;
+
+                    if self.tick_sys {
+                        self.advance_cap(&t);
+                    }
+
+                    self.buffer.push((self.curr_cap.get_epoch(), self.seq_no, (t, wid, x)));
+                }
+                // Remote data receive events
+                Messages(e) if e.source != e.target && e.target == wid => {
+                    self.pag_messages += 1;
+                    self.seq_no += 1;
+
+                    let (last_epoch, last_seq, last_event) = self.buffer.pop()
+                        .expect("non-empty buffer required");
+
+                    assert!(if let Schedule(e) = &last_event.2 {e.start_stop == StartStop::Start}
+                            else {false});
+
+                    // Reposition received remote data message:
+                    // 1. push the data message with previous' seq_no
+                    self.buffer.push((self.curr_cap.get_epoch(), last_seq, (t, wid, x)));
+                    // 2. push the schedule event
+                    self.buffer.push((last_epoch, self.seq_no, last_event));
+                }
+                // remote data send events
+                Messages(e) if e.source != e.target => {
+                    self.pag_messages += 1;
+                    self.fuel -= 1;
+                    self.seq_no += 1;
+                    if self.tick_sys {
+                        self.advance_cap(&t);
+                    }
+                    self.buffer.push((self.curr_cap.get_epoch(), self.seq_no, (t, wid, x)));
+                }
+                _ => {}
+            }
+
+            if self.fuel == 0 {
+                self.flush_buffer();
+            }
+        }
+    }
+
+    /// Flushes the buffer. The buffer is written out at `curr_cap`.
+    fn flush_buffer(&mut self) {
+        info!("flushing to {}", self.curr_writer);
+        if self.buffer.len() > 0 {
+            info!("w{} flush@{:?}: count: {}", self.worker_index, self.curr_cap, self.buffer.len());
+            self.writers[self.curr_writer].push(Event::Messages(self.curr_cap.clone(), std::mem::replace(&mut self.buffer, Vec::new())));
+        }
+
+        self.curr_writer = (self.curr_writer + 1) % self.writers.len();
+        self.fuel = MAX_FUEL;
+        self.tick_sys = true;
+    }
+
+    /// Sends progress information for SnailTrail. The capability is
+    /// downgraded to `next_cap`, allowing the frontier to advance.
+    fn advance_cap(&mut self, t: &Duration) {
+        info!("w{} progresses from {:?} to {:?}", self.worker_index, self.curr_cap, self.next_cap);
+
+        self.next_cap.tick_sys(t);
+        self.tick_sys = false;
+
+        for writer in self.writers.iter_mut() {
+            writer.push(Event::Progress(vec![
+                (self.next_cap.clone(), 1),
+                (self.curr_cap.clone(), -1),
+            ]));
+        }
+
+        self.curr_cap = self.next_cap.clone();
     }
 }
 
-/// Sends progress information for SnailTrail. The capability is
-/// downgraded to `next_cap`, allowing the frontier to advance.
-fn advance_cap<W, T>(writers: &mut Vec<ReplayWriter<T, W>>,
-                     next_cap: &mut T,
-                     curr_cap: &mut T,
-                     index: usize)
-where
-    W: 'static + Write,
-    T: Abomonation + Clone + Debug {
-    info!("w{} progresses from {:?} to {:?}", index, curr_cap, next_cap);
+impl<T, W> Drop for PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation, W: 'static + Write {
+    fn drop(&mut self) {
+        info!("w{}@ep{:?}: timely logging wrapping up", self.worker_index, self.curr_cap);
+        // assert!(self.buffer.len() == 0, "flush buffer before wrap up!");
 
-    for writer in writers.iter_mut() {
-        writer.push(Event::Progress(vec![
-            (next_cap.clone(), 1),
-            (curr_cap.clone(), -1),
-        ]));
+        // free capabilities
+        for writer in self.writers.iter_mut() {
+            writer.push(Event::Progress(vec![(self.curr_cap.clone(), -1)]));
+        }
     }
-
-    *curr_cap = next_cap.clone();
 }
