@@ -13,8 +13,8 @@ use std::path::PathBuf;
 
 use logformat::pair::Pair;
 
-use timely_diag_connect::receive as connect;
-use timely_diag_connect::receive::ReplaySource;
+use tdiag_connect::receive as connect;
+use tdiag_connect::receive::ReplaySource;
 
 fn main() {
     env_logger::init();

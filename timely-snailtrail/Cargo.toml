@@ -12,7 +12,7 @@ logformat = { version = "0.2.0", path = "../logformat" }
 timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }
 timely = "0.9"
 differential-dataflow = "0.9"
-timely-diag-connect = { git = "https://github.com/TimelyDataflow/diagnostics", branch = "receive" }
+tdiag-connect = "0.1.0"
 
 [dev-dependencies]
 env_logger = "^0.6.1"
