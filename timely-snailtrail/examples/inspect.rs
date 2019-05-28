@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 use timely_snailtrail::{pag, Config};
 use timely_snailtrail::pag::DumpPAG;
 
@@ -5,7 +8,6 @@ use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::operators::capture::replay::Replay;
 use timely::dataflow::operators::capture::EventReader;
-
 
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
@@ -51,41 +53,87 @@ fn inspector(config: Config) {
     };
 
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {
-        let timer = std::time::Instant::now();
-        let mut timer2 = std::time::Instant::now();
-
         let index = worker.index();
         if index == 0 {
             println!("{:?}", &config);
         }
+
+        use std::fs::File;
+        use std::io::Write;
+        let mut file = File::create(format!("out_{}_{}_{}.csv", index, config.worker_peers, config.source_peers)).expect("couldn't create file");
 
         // read replayers from file (offline) or TCP stream (online)
         let readers: Vec<EventReader<_, timely_adapter::connect::CompEvent, _>> =
             connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
-            pag::create_pag(scope, replayers, index)
-            // replayers.replay_into(scope)
-            // timely_adapter::create_lrs(scope, replayers, index)
+            use timely::dataflow::operators::generic::operator::Operator;
+            use timely::dataflow::operators::generic::OutputHandle;
+            use timely_snailtrail::pag::PagEdge;
+            use std::time::Instant;
+            use timely::logging::TimelyEvent;
+            use logformat::LogRecord;
+
+            pag::create_pag(scope, readers, index)
+            // timely_adapter::create_lrs(scope, readers, index)
+                // .filter(|x| x.source.epoch > x.destination.epoch)
+                // .inspect(move |(x, t, diff)| println!("w{} | {} -> {}: -> w{}\t {:?}", x.source.worker_id, x.source.seq_no, x.destination.seq_no, x.destination.worker_id, x.edge_type))
+                // readers.replay_into(scope)
+                .inner
+                .unary_frontier(timely::dataflow::channels::pact::Exchange::new(|_x| 0), "TheVoid", move |_cap, _info| {
+                    let mut t0 = Instant::now();
+                    let mut last: Pair<u64, Duration> = Default::default();
+                    let mut buffer = Vec::new();
+                    let mut count = 0;
+
+                    move |input, output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
+                        let mut received_input = false;
+                        input.for_each(|cap, data| {
+                            data.swap(&mut buffer);
+                            received_input = !buffer.is_empty();
+                            count += buffer.len();
+                            // for x in buffer.drain(..) {
+                            //     count += x.2; // subtract retractions
+                            // }
+                            buffer.clear();
+                        });
+
+                        if input.frontier.is_empty() {
+                            println!("[{:?}] inputs to void sink ceased", t0.elapsed());
+                            println!("{:?}", count);
+                            writeln!(file, "{},{},{},{}", t0.elapsed().as_millis(), count, last.first, last.second.as_millis()).expect("write failed");
+                        } else if received_input && !input.frontier.frontier().less_equal(&last) {
+                            writeln!(file, "{},{},{},{}", t0.elapsed().as_millis(), count, last.first, last.second.as_millis()).expect("write failed");
+
+                            last = input.frontier.frontier()[0].clone();
+                            t0 = Instant::now();
+                        }
+                    }
+                })
                 .probe()
         });
 
+
+        let mut timer = std::time::Instant::now();
         let mut curr_frontier = vec![];
-        // while probe.less_equal(&Pair::new(3, std::time::Duration::from_secs(100000000000))) {
+        // while probe.less_equal(&Pair::new(2, std::time::Duration::from_secs(0))) {
         while !probe.done() {
             probe.with_frontier(|f| {
                 let f = f.to_vec();
                 if f != curr_frontier {
-                    println!("w{} frontier: {:?} | took {:?}ms", index, f, timer2.elapsed().as_millis());
-                    timer2 = std::time::Instant::now();
+                    info!("w{} frontier: {:?} | took {:?}ms", index, f, timer.elapsed().as_millis());
+                    timer = std::time::Instant::now();
                     curr_frontier = f;
                 }
             });
             worker.step();
-        }
+        };
 
-        println!("done with stepping.");
-        println!("w{} done: {}ms", index, timer.elapsed().as_millis());
+        // stall application
+        // use std::io::stdin;
+        // stdin().read_line(&mut String::new()).unwrap();
+
+        info!("w{} done", index);
     })
     .unwrap();
 }
