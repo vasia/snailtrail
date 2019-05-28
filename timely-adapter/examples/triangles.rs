@@ -25,24 +25,21 @@ fn main() {
     // snag a filename to use for the input graph.
     let mut args = std::env::args();
 
-    println!("CLAs: {:?}", args);
+    info!("CLAs: {:?}", args);
 
     let _ = args.next(); // bin name
     let filename = args.next().expect("file name");
-    let batching = args.next().expect("missing batching").parse::<usize>().unwrap();
+    let batch_size = args.next().expect("missing batch size").parse::<usize>().unwrap();
     let load_balance_factor = args.next().expect("missing lbf").parse::<usize>().unwrap();
     let _ = args.next(); // --
 
     let args = args.collect::<Vec<_>>();
     timely::execute_from_args(args.clone().into_iter(), move |worker| {
-        println!("triangles with args: {:?}, w{}, lbf {}", args, worker.peers(), load_balance_factor);
+        info!("triangles with args: {:?}, w{}, lbf {}", args, worker.peers(), load_balance_factor);
         register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
 
         let timer = std::time::Instant::now();
         let graph = GraphMMap::new(&filename);
-
-        let peers = worker.peers();
-        let index = worker.index();
 
         let mut probe = Handle::new();
 
@@ -120,26 +117,29 @@ fn main() {
             )));
         }
 
-        let mut index = index;
-        // 10_000 nodes suffice for testing
-        while index < 3_001
-        /*graph.nodes()*/
-        {
-            input.advance_to(index);
-            for &edge in graph.edges(index) {
-                input.insert((index as u32, edge));
+        let peers = worker.peers();
+        let index = worker.index();
+
+        for i in 0..(1000 * batch_size) {
+            // for w0 in 4w comp: 0, 5, 10, ...
+            let curr_node = i * peers + index;
+            for &edge in graph.edges(curr_node) {
+                input.insert((curr_node, edge as usize));
             }
 
-            index += peers;
-            input.advance_to(index);
-            input.flush();
-            if (index / peers) % batching == 0 {
+            if i % batch_size == 0 {
+                input.advance_to((i / batch_size) + 1);
+                input.flush();
                 while probe.less_than(input.time()) {
                     worker.step();
                 }
-                info!("w{} {:?}\tRound {} complete", worker.index(), timer.elapsed(), index);
-                info!("w{} [st] closed times before: {:?}", worker.index(), input.time());
 
+                // TODO: ipad weiter abarbeiten
+                    // andere computations nehmen
+                    // drop implementieren
+                    // richtige epochen loggen (replay implementieren)
+
+                info!("w{} {:?}\tEpoch {} complete, close times before: {:?}", index, timer.elapsed(), i, input.time());
                 if let Some(timely_logger) = &timely_logger {
                     timely_logger.log(TimelyEvent::Text(format!(
                         "[st] closed times before: {:?}",
@@ -147,10 +147,6 @@ fn main() {
                     )));
                 }
             }
-        }
-
-        if let Some(timely_logger) = &timely_logger {
-            timely_logger.log(TimelyEvent::Text("[st] computation done".to_string()));
         }
     })
     .unwrap();
