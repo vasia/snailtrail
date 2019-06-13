@@ -136,7 +136,6 @@ fn main() {
 
                 // TODO: ipad weiter abarbeiten
                     // andere computations nehmen
-                    // drop implementieren
                     // richtige epochen loggen (replay implementieren)
 
                 info!("w{} {:?}\tEpoch {} complete, close times before: {:?}", index, timer.elapsed(), i, input.time());

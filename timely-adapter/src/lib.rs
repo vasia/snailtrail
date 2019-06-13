@@ -9,6 +9,8 @@ extern crate log;
 
 pub mod connect;
 use crate::connect::{Replayer, CompEvent};
+pub mod replay_throttled;
+use crate::replay_throttled::ReplayThrottled;
 
 use logformat::{ActivityType, EventType, LogRecord};
 use logformat::pair::Pair;
@@ -19,7 +21,8 @@ use std::time::Duration;
 use timely::{
     dataflow::{
         channels::pact::Pipeline,
-        operators::{capture::replay::Replay, generic::operator::Operator, map::Map},
+        operators::generic::operator::Operator,
+        operators::map::Map,
         Scope, Stream,
     },
     logging::{
@@ -51,7 +54,7 @@ where
     R: Read + 'static,
 {
     replayers
-        .replay_into(scope)
+        .replay_throttled_into(scope, None)
         .construct_lrs(index)
 }
 
@@ -102,7 +105,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                             retract.2 = -1;
 
                             session.give(record);
-                            session.give(retract);
+                            // session.give(retract);
                         }
                     }
                 });
