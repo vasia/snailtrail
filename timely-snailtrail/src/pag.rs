@@ -17,6 +17,9 @@ use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
 use timely_adapter::{connect::Replayer, create_lrs};
 
+use differential_dataflow::operators::arrange::ArrangeByKey;
+use differential_dataflow::operators::join::JoinCore;
+
 /// A node in the PAG
 #[derive(Abomonation, Clone, PartialEq, Hash, Eq, Copy)]
 pub struct PagNode {
@@ -108,6 +111,8 @@ impl std::fmt::Debug for PagEdge {
     }
 }
 
+use timely::dataflow::operators::probe::Handle;
+
 // @TODO currently, this creates a new pag per epoch, but never removes the old one.
 //       so state will continually grow and multiple pags exist side by side.
 // @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
@@ -122,9 +127,12 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read> 
     scope: &mut S,
     replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
+    throttle: u64,
+    probe: &mut Handle<S::Timestamp>,
 ) -> Collection<S, PagEdge, isize>
 where S::Timestamp: Lattice + Ord {
-    create_lrs(scope, replayers, index)
+    create_lrs(scope, replayers, index, throttle)
+        .probe_with(probe)
         .construct_pag(index)
 }
 
@@ -161,8 +169,12 @@ where S::Timestamp: Lattice + Ord {
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S, LogRecord, isize>
 where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize> {
-use timely::dataflow::operators::inspect::Inspect;
-        use differential_dataflow::operators::consolidate::Consolidate;
+        // local edges:
+        // 2w, 10eif, 600e
+        // preprocessing + map + debug map: ~27
+        // preprocessing + map + arrange + debug map: ~33
+        // preprocessing + map + arrange + join: ~40
+
         self
             .make_local_edges(index)
             .concat(&self.make_control_edges())
@@ -172,12 +184,11 @@ use timely::dataflow::operators::inspect::Inspect;
     // this should scale with epoch size, as it can update incrementally
     // however, it takes longer than simple timely computations
     fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize> {
-        let edge_start = self.map(|x| ((x.local_worker, x.epoch, x.seq_no), x));
-        let edge_end = self.map(|x| ((x.local_worker, x.epoch, x.seq_no + 1), x));
+        let edge_start = self.map(|x| ((x.local_worker, x.epoch, x.seq_no), x)).arrange_by_key();
+        let edge_end = self.map(|x| ((x.local_worker, x.epoch, x.seq_no + 1), x)).arrange_by_key();
 
         edge_start
-            .join(&edge_end)
-            .map(|(_, (curr, prev))| Self::build_local_edge(&prev, &curr))
+            .join_core(&edge_end, |_key, curr, prev| Some(Self::build_local_edge(&prev, &curr)))
     }
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
@@ -218,41 +229,43 @@ use timely::dataflow::operators::inspect::Inspect;
             .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
             })
-            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
+            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x))
+            .arrange_by_key();
 
         let received = self
             .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage
                     && x.event_type == EventType::Received
             })
-            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x))
+            .arrange_by_key();
 
-        sent.join(&received)
-            .map(|(_key, (from, to))| PagEdge {
-                source: PagNode::from(&from),
-                destination: PagNode::from(&to),
-                edge_type: ActivityType::ControlMessage,
-                operator_id: None,
-                traverse: TraversalType::Unbounded,
-            })
+        sent.join_core(&received, |_key, from, to| Some(PagEdge {
+            source: PagNode::from(from),
+            destination: PagNode::from(to),
+            edge_type: ActivityType::ControlMessage,
+            operator_id: None,
+            traverse: TraversalType::Unbounded,
+        }))
     }
 
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
         let sent = self
             .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x))
+            .arrange_by_key();
 
         let received = self
             .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x));
+            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x))
+            .arrange_by_key();
 
-        sent.join(&received)
-            .map(|(_key, (from, to))| PagEdge {
-                source: PagNode::from(&from),
-                destination: PagNode::from(&to),
-                edge_type: ActivityType::DataMessage,
-                operator_id: None, // @TODO could be used to store op info
-                traverse: TraversalType::Unbounded
-            })
+        sent.join_core(&received, |key, from, to| Some(PagEdge {
+            source: PagNode::from(from),
+            destination: PagNode::from(to),
+            edge_type: ActivityType::DataMessage,
+            operator_id: None, // @TODO could be used to store op info
+            traverse: TraversalType::Unbounded
+        }))
     }
 }
