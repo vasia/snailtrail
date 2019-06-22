@@ -63,6 +63,10 @@ where
 trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
     /// Constructs a collection of log records to be used in PAG construction from an event stream.
     fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize>;
+    /// Strips an event `Stream` of encompassing operators
+    /// (e.g. the dataflow operator for every direct child,
+    /// the surrounding iterate operators for loops).
+    fn peel_ops(&self, index: usize) -> Stream<S, CompEvent>;
     /// Makes a stream of log records from an event stream.
     fn make_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
     /// Builds a log record at differential time `time` from the supplied computation event.
@@ -74,44 +78,74 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
     where S::Timestamp: Lattice + Ord
 {
     fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize> {
-        self.make_lrs(index)
+        self.peel_ops(index)
+            .make_lrs(index)
             .as_collection()
-            .peel_operators(&self)
+    }
 
-        // arrange_core + as_collection is the same as consolidate,
-        // but allows to specify the exchange contract used. We
-        // don't want records to be shuffled around -> Pipeline.
-        // .arrange_core::<_, OrdValSpine<_, _, _, _>>(Pipeline, "PipelinedConsolidate")
-        // .as_collection(|d, _| d.clone())
-        // .inspect(|x| println!("{:?}", x))
+    fn peel_ops(&self, index: usize) -> Stream<S, CompEvent> {
+        let mut vector = Vec::new();
+        let mut outer_operates = std::collections::BTreeSet::new();
+        let mut ids_to_addrs = std::collections::HashMap::new();
+        let mut total = 0;
+
+        self.unary(Pipeline, "Peel", move |_, _| { move |input, output| {
+            let timer = std::time::Instant::now();
+
+            input.for_each(|cap, data| {
+                data.swap(&mut vector);
+                for (epoch, seq_no, (t, wid, x)) in vector.drain(..) {
+                    match x {
+                        Operates(e) => {
+                            let mut addr = e.addr.clone();
+                            addr.pop();
+                            outer_operates.insert(addr);
+
+                            ids_to_addrs.insert(e.id, e.addr);
+                        }
+                        Schedule(ref e) => {
+                            assert!(cap.time() > &Pair::new(0, Default::default()));
+
+                            let addr = ids_to_addrs.get(&e.id).expect("operates went wrong");
+                            if !outer_operates.contains(addr) {
+                                output.session(&cap).give((epoch, seq_no, (t, wid, x)));
+                            }
+                        }
+                        _ => {
+                            assert!(cap.time() > &Pair::new(0, Default::default()));
+
+                            output.session(&cap).give((epoch, seq_no, (t, wid, x)));
+                        }
+                    }
+                }
+
+                if cap.time().first > 2996 {
+                    total += timer.elapsed().as_nanos();
+                    println!("w{}@{:?} peel_ops time: {}ms", index, cap.time(), total / 1_000_000);
+                }
+            });
+            total += timer.elapsed().as_nanos();
+        }})
     }
 
     fn make_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
-        self.unary_frontier(Pipeline, "LogRecordConstruct", |_capability, _info| {
-            let mut vector = Vec::new();
+        let mut vector = Vec::new();
+        let mut total = 0;
 
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    data.swap(&mut vector);
+        self.unary(Pipeline, "LogRecordConstruct", move |_, _| { move |input, output| {
+            let timer = std::time::Instant::now();
+            input.for_each(|cap, data| {
+                data.swap(&mut vector);
+                output.session(&cap).give_iterator(vector.drain(..).flat_map(|x| Self::build_lr(x, cap.time().clone()).into_iter()));
+                // @TODO: handle retractions (record.1.first += 1; record.2 = -1)
 
-                    let mut session = output.session(&cap);
-
-                    for comp_event in vector.drain(..) {
-                        let record = Self::build_lr(comp_event, cap.time().clone());
-
-                        if let Some(record) = record {
-                            // retract every log record at next epoch
-                            let mut retract = record.clone();
-                            retract.1.first += 1;
-                            retract.2 = -1;
-
-                            session.give(record);
-                            // session.give(retract);
-                        }
-                    }
-                });
-            }
-        })
+                if cap.time().first > 2996 {
+                    total += timer.elapsed().as_nanos();
+                    println!("w{}@{:?} make_lrs time: {}ms", index, cap.time(), total / 1_000_000);
+                }
+            });
+            total += timer.elapsed().as_nanos();
+        }})
     }
 
     fn build_lr<T: Lattice + Ord>(comp_event: CompEvent, time: T) -> Option<(LogRecord, T, isize)> {
@@ -206,53 +240,19 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     1,
                 ))
             }
+            // Channels / Operates events
             _ => None
         }
     }
 }
 
-
-/// Strips a `Collection` of `LogRecord`s from encompassing operators.
-trait PeelOperators<S: Scope> where S::Timestamp: Lattice + Ord {
-    /// Returns a stream of LogRecords where records that describe
-    /// encompassing operators have been stripped off
-    /// (e.g. the dataflow operator for every direct child,
-    /// the surrounding iterate operators for loops)
-    fn peel_operators(
-        &self,
-        stream: &Stream<S, CompEvent>,
-    ) -> Collection<S, LogRecord, isize>;
-}
-
-impl<S: Scope> PeelOperators<S> for Collection<S, LogRecord, isize>
-where S::Timestamp: Lattice + Ord {
-    fn peel_operators(
-        &self,
-        stream: &Stream<S, CompEvent>,
-    ) -> Collection<S, LogRecord, isize> {
-        // only operates events, keyed by addr
-        let operates = stream
-            .flat_map(|(_, _, (_t, wid, x))| {
-                if let Operates(x) = x {
-                    Some(((x.addr, (wid as u64, Some(x.id as u64))), Default::default(), 1))
-                } else {
-                    None
-                }
-            })
-            .as_collection();
-
-        let peel_addrs = operates.map(|(mut addr, _)| {
-            addr.pop();
-            addr
-        });
-
-        let peel_ids = operates
-            .semijoin(&peel_addrs)
-            .map(|(_, (wid, id))| (wid, id))
-            .distinct();
-
-        self.map(|x| ((x.local_worker, x.operator_id), x))
-            .antijoin(&peel_ids)
-            .map(|(_, x)| x)
-    }
-}
+// let mut vector = Vec::new();
+// .inner
+// .unary_frontier(Pipeline, "Logger", move |_, _| { move |input, output| {
+//     input.for_each(|cap, data| {
+//         data.swap(&mut vector);
+//         output.session(&cap).give_iterator(vector.drain(..));
+//     });
+//     // println!("ggg: {} --- {:?}", index, input.frontier().frontier().to_vec());
+// }})
+// .as_collection()
