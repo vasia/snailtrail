@@ -36,16 +36,19 @@ use timely::progress::frontier::MutableAntichain;
 
 use timely::dataflow::operators::capture::event::{Event, EventIterator};
 
+use logformat::pair::Pair;
+use std::time::Duration;
+
 /// Replay a capture stream into a scope with the same timestamp.
-pub trait ReplayThrottled<T: Timestamp, D: Data + std::fmt::Debug> {
+pub trait ReplayThrottled<D: Data + std::fmt::Debug> {
     /// Replays `self` into the provided scope, as a `Stream<S, D>`.
-    fn replay_throttled_into<S: Scope<Timestamp=T>>(self, scope: &mut S, is_running: Option<Arc<AtomicBool>>) -> Stream<S, D>;
+    fn replay_throttled_into<S: Scope<Timestamp=Pair<u64, Duration>>>(self, worker: usize, scope: &mut S, is_running: Option<Arc<AtomicBool>>, epochs_in_flight: u64) -> Stream<S, D>;
 }
 
-impl<T: Timestamp, D: Data + std::fmt::Debug, I> ReplayThrottled<T, D> for I
+impl<D: Data + std::fmt::Debug, I> ReplayThrottled<D> for I
 where I : IntoIterator,
-      <I as IntoIterator>::Item: EventIterator<T, D>+'static {
-    fn replay_throttled_into<S: Scope<Timestamp=T>>(self, scope: &mut S, is_running: Option<Arc<AtomicBool>>) -> Stream<S, D> {
+      <I as IntoIterator>::Item: EventIterator<Pair<u64, Duration>, D>+'static {
+    fn replay_throttled_into<S: Scope<Timestamp=Pair<u64, Duration>>>(self, worker: usize, scope: &mut S, is_running: Option<Arc<AtomicBool>>, epochs_in_flight: u64) -> Stream<S, D> {
 
         let mut builder = OperatorBuilder::new("ReplayThrottled".to_owned(), scope.clone());
 
@@ -58,9 +61,18 @@ where I : IntoIterator,
         let mut event_streams = self.into_iter().collect::<Vec<_>>();
         let mut started = false;
 
-        let mut antichain = MutableAntichain::new();
+        let mut antichain: MutableAntichain<Pair<u64, Duration>> = MutableAntichain::new();
 
-        // let mut buffer = Vec::new();
+        let mut buffer: Vec<Vec<_>> = Vec::new();
+
+        for _ in event_streams.iter() {
+            buffer.push(vec![]);
+        }
+
+        let mut file_read = 2 * event_streams.len() + 1;
+
+        let mut timer = std::time::Instant::now();
+        let mut total = 0;
 
         builder.build(
             move |_frontier| { },
@@ -70,42 +82,91 @@ where I : IntoIterator,
                     // This should be a simple change of `self.event_streams.len() - 1`. We only do this once, as
                     // our very first action.
                     internal[0].update(Default::default(), (event_streams.len() as i64) - 1);
-                    antichain.update_iter(Some((Default::default(), (event_streams.len() as i64) - 1)).into_iter());
+                    antichain.update_iter(Some((Default::default(), (event_streams.len() as i64))).into_iter());
+
                     started = true;
                 }
+
+                let frontier = antichain.frontier().to_vec();
+                let frontier = frontier.get(0);
 
                 let running = if let Some(x) = &is_running {
                     x.load(Ordering::Acquire)
                 } else {
                     true
                 };
+
                 if running {
-                    for event_stream in event_streams.iter_mut() {
-                        while let Some(event) = event_stream.next() {
-                            match event {
-                                Event::Progress(ref vec) => {
-                                    antichain.update_iter(vec.iter().cloned());
-                                    internal[0].extend(vec.iter().cloned());
-                                },
-                                Event::Messages(ref time, ref data) => {
-                                    output.session(time).give_iterator(data.iter().cloned());
-                                }
+                    for (idx, event_stream) in event_streams.iter_mut().enumerate() {
+                        if let Some(event) = event_stream.next() {
+                            buffer[idx].push(event.clone());
+                            while let Some(event) = event_stream.next() {
+                                buffer[idx].push(event.clone());
                             }
-                            println!("{:?}", event);
+                        } else {
+                            if file_read > 0 {
+                                file_read -= 1;
+                            }
+                            if file_read == 1 {
+                                println!("{}@{:?} file read in {}ms", worker, frontier.unwrap(), timer.elapsed().as_millis());
+                            }
                         }
                     }
 
-                    // for event in buffer.drain(..10) {
-                    //     match event {
-                    //         Event::Progress(ref vec) => {
-                    //             antichain.update_iter(vec.iter().cloned());
-                    //             internal[0].extend(vec.iter().cloned());
-                    //         },
-                    //         Event::Messages(ref time, ref data) => {
-                    //             output.session(time).give_iterator(data.iter().cloned());
-                    //         }
-                    //     }
-                    // }
+                    // println!("{} - {:?}", worker, antichain.frontier().to_vec());
+
+                    if file_read == 0 {
+                        timer = std::time::Instant::now();
+
+                        for (idx, event_stream) in buffer.iter_mut().enumerate() {
+                            let drainable = event_stream.iter().filter(|event| {
+                                if let Some(f) = frontier {
+                                    match event {
+                                        Event::Progress(ref vec) => {
+                                            let epoch = vec[0].0.first;
+
+                                            // we should never see a progress message for
+                                            // a new time that is earlier than the frontier
+                                            assert!(epoch >= f.first);
+
+                                            epoch >= f.first && epoch <= f.first + epochs_in_flight
+                                        },
+                                        Event::Messages(ref time, ref _data) => {
+                                            // all messages from previous times should've been
+                                            // processed already
+                                            assert!(time.first >= f.first);
+
+                                            time.first >= f.first && time.first <= f.first + epochs_in_flight - 1
+                                        }
+                                    }
+                                } else {
+                                    false
+                                }
+                            }).count();
+
+                            // push to stream
+                            for event in event_stream.drain(..drainable) {
+                                match event {
+                                    Event::Progress(ref vec) => {
+                                        let mut vec = vec.clone();
+                                        if vec[0].1 == -1 {
+                                            println!("w{}@{:?} replay time: {}ms", worker, frontier.unwrap(), total / 1_000_000);
+                                        }
+
+                                        // println!("{}@{}: {:?}", worker, idx, vec);
+                                        antichain.update_iter(vec.iter().cloned());
+                                        internal[0].extend(vec.iter().cloned());
+                                    },
+                                    Event::Messages(ref time, ref data) => {
+                                        // println!("{}@{}: data{:?}", worker, idx, time);
+                                        output.session(time).give_iterator(data.iter().cloned());
+                                    }
+                                }
+                            }
+                        }
+
+                        total += timer.elapsed().as_nanos();
+                    }
 
                     // Always reschedule `replay`.
                     activator.activate();
