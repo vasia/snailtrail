@@ -120,7 +120,12 @@ fn main() {
         let peers = worker.peers();
         let index = worker.index();
 
-        for i in 0..(1000 * batch_size) {
+        // Note: parallelization makes this computation more complex (as `n` times the
+        // input is inserted). We're not interested in speeding up triangles, but measuring
+        // how fast SnailTrail can process the generated log traces.
+        // Similarly, a higher batch slows down the computation as well, as 1000 * batch_size
+        // inputs are ingested by each worker.
+        for i in 0..(3000 * batch_size) {
             // for w0 in 4w comp: 0, 5, 10, ...
             let curr_node = i * peers + index;
             for &edge in graph.edges(curr_node) {
@@ -133,10 +138,6 @@ fn main() {
                 while probe.less_than(input.time()) {
                     worker.step();
                 }
-
-                // TODO: ipad weiter abarbeiten
-                    // andere computations nehmen
-                    // richtige epochen loggen (replay implementieren)
 
                 info!("w{} {:?}\tEpoch {} complete, close times before: {:?}", index, timer.elapsed(), i, input.time());
                 if let Some(timely_logger) = &timely_logger {
