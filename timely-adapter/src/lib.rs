@@ -47,6 +47,7 @@ pub fn create_lrs<S, R>(
     scope: &mut S,
     replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
+    throttle: u64,
 ) -> Collection<S, LogRecord, isize>
 where
     S: Scope<Timestamp = Pair<u64, Duration>>,
@@ -54,7 +55,7 @@ where
     R: Read + 'static,
 {
     replayers
-        .replay_throttled_into(scope, None)
+        .replay_throttled_into(index, scope, None, throttle)
         .construct_lrs(index)
 }
 

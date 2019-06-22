@@ -31,6 +31,8 @@ pub struct Config {
     pub from_file: bool,
     /// # of SnailTrail workers
     pub worker_peers: usize,
+    /// max epochs in flight
+    pub throttle: u64,
 }
 
 // /// Elements of a complete activity graph, including ingress/egress points
