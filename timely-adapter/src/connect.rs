@@ -217,16 +217,22 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
 
                     self.next_cap.tick_epoch(&t);
 
-                    self.flush_buffer();
+                    if self.curr_cap == Default::default() {
+                        // The dataflow structure is propagated to all writers.
+                        self.flush_to_all();
+                    } else {
+                        self.flush_buffer();
+                    }
                 }
-                Operates(_) | Channels(_) => {
+                Operates(_) => {
                     self.pag_messages += 1;
+                    self.fuel -= 1;
+                    self.seq_no += 1;
+
                     // all operates events should happen in the initialization epoch,
                     // i.e., before any Text event epoch markers have been observed
                     assert!(self.next_cap == self.curr_cap && self.curr_cap == Default::default());
 
-                    self.fuel -= 1;
-                    self.seq_no += 1;
                     self.buffer.push((self.curr_cap.get_epoch(), self.seq_no, (Default::default(), wid, x)));
                 }
                 Schedule(e) => {
@@ -292,11 +298,22 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
         }
     }
 
+    /// Flushes the buffer repeatedly, until all writers have received its content.
+    fn flush_to_all(&mut self) {
+        info!("w{}: flush@{:?} to ALL - count: {}", self.worker_index, self.curr_cap, self.buffer.len());
+        for writer in self.writers.iter_mut() {
+            writer.push(Event::Messages(self.curr_cap.clone(), self.buffer.clone()));
+        }
+        self.buffer.drain(..);
+
+        self.fuel = MAX_FUEL;
+        self.tick_sys = true;
+    }
+
     /// Flushes the buffer. The buffer is written out at `curr_cap`.
     fn flush_buffer(&mut self) {
-        info!("flushing to {}", self.curr_writer);
+        info!("w{} flush@{:?} to {} - count: {}", self.worker_index, self.curr_cap, self.curr_writer, self.buffer.len());
         if self.buffer.len() > 0 {
-            info!("w{} flush@{:?}: count: {}", self.worker_index, self.curr_cap, self.buffer.len());
             self.writers[self.curr_writer].push(Event::Messages(self.curr_cap.clone(), std::mem::replace(&mut self.buffer, Vec::new())));
         }
 
@@ -308,10 +325,10 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
     /// Sends progress information for SnailTrail. The capability is
     /// downgraded to `next_cap`, allowing the frontier to advance.
     fn advance_cap(&mut self, t: &Duration) {
-        info!("w{} progresses from {:?} to {:?}", self.worker_index, self.curr_cap, self.next_cap);
-
         self.next_cap.tick_sys(t);
         self.tick_sys = false;
+
+        info!("w{} progresses from {:?} to {:?}", self.worker_index, self.curr_cap, self.next_cap);
 
         for writer in self.writers.iter_mut() {
             writer.push(Event::Progress(vec![
