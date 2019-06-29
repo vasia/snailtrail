@@ -64,8 +64,8 @@ where I : IntoIterator,
 
         let mut started = false;
 
-        let mut total = 0;
-        let mut millis = 0;
+        let mut total_events = 0;
+        let mut total_time = 0;
         let mut done = false;
 
         builder.build(
@@ -109,7 +109,7 @@ where I : IntoIterator,
                                         }
                                     },
                                     Event::Messages(ref time, ref data) => {
-                                        total += 1;
+                                        total_events += 1;
                                         output.session(time).give_iterator(data.iter().cloned());
                                     }
                                 }
@@ -117,9 +117,9 @@ where I : IntoIterator,
                         }
                     } else {
                         if !done {
-                            millis += timer.elapsed().as_millis();
-                            println!("w{} replay_throttled: total {}ms", worker, millis);
-                            println!("w{} replayed {} messages", worker, total);
+                            total_time += timer.elapsed().as_nanos();
+                            println!("w{} replay_throttled: total {}ms", worker, total_time / 1_000_000);
+                            println!("w{} replayed {} messages", worker, total_events);
                             done = true;
                         }
                     }
@@ -139,7 +139,7 @@ where I : IntoIterator,
                     }
                 }
 
-                millis += timer.elapsed().as_millis();
+                total_time += timer.elapsed().as_nanos();
 
                 false
             }
