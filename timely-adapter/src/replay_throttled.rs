@@ -60,6 +60,12 @@ where I : IntoIterator,
         let mut output = PushBuffer::new(PushCounter::new(targets));
         let mut event_streams = self.into_iter().collect::<Vec<_>>();
 
+        let len = event_streams.len();
+        let mut buffer = Vec::with_capacity(len);
+        for _ in 0 .. len {
+            buffer.push(Vec::new());
+        }
+
         let mut antichain: MutableAntichain<Pair<u64, Duration>> = MutableAntichain::new();
 
         let mut started = false;
@@ -94,26 +100,59 @@ where I : IntoIterator,
                     let frontier = frontier.get(0);
 
                     if let Some(f) = frontier {
-                        for event_stream in event_streams.iter_mut() {
-                            while let Some(event) = event_stream.next() {
-                                match event {
-                                    Event::Progress(ref vec) => {
+
+                        // loops as long as we haven't read in `epochs_in_flight` epochs
+                        let mut should_continue = true;
+                        while should_continue {
+                            for (idx, event_stream) in event_streams.iter_mut().enumerate() {
+                                while let Some(event) = event_stream.next() {
+                                    buffer[idx].push(event.clone());
+
+                                    if let Event::Progress(ref vec) = event {
                                         let epoch = vec[0].0.first;
 
-                                        antichain.update_iter(vec.iter().cloned());
-                                        internal[0].extend(vec.iter().cloned());
+                                        // yield once enough epochs are in flight,
+                                        // or if we're retracting all capabilities
+                                        if (epoch > f.first + (epochs_in_flight - 1)) || vec[0].1 < 0 {
+                                            should_continue = false;
+                                        }
 
-                                        // yield once enough epochs are in flight
-                                        if epoch > f.first + (epochs_in_flight - 1) {
+                                        // progress to next stream after each epoch
+                                        if epoch > f.first {
                                             break;
                                         }
-                                    },
-                                    Event::Messages(ref time, ref data) => {
-                                        total_events += 1;
-                                        output.session(time).give_iterator(data.iter().cloned());
                                     }
                                 }
                             }
+
+                            // sort by epoch time
+                            buffer.sort_by_key(|events| {
+                                if let Some(event) = events.get(0) {
+                                    match event {
+                                        Event::Progress(ref vec) => vec[0].0.first,
+                                        Event::Messages(ref time, _data) => time.first
+                                    }
+                                } else { 0 }
+                            });
+
+                            // provide sorted events to computation
+                            for events in buffer.iter_mut() {
+                                for event in events.drain(..) {
+                                    match event {
+                                        Event::Progress(ref vec) => {
+                                            let epoch = vec[0].0.first;
+
+                                            antichain.update_iter(vec.iter().cloned());
+                                            internal[0].extend(vec.iter().cloned());
+                                        },
+                                        Event::Messages(ref time, ref data) => {
+                                            total_events += 1;
+                                            output.session(time).give_iterator(data.iter().cloned());
+                                        }
+                                    }
+                                }
+                            }
+
                         }
                     } else {
                         if !done {
