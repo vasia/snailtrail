@@ -12,6 +12,10 @@ use differential_dataflow::lattice::Lattice;
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::probe::Probe;
+use timely::dataflow::Stream;
+use timely::dataflow::operators::filter::Filter;
+use timely::dataflow::operators::map::Map;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
@@ -166,12 +170,11 @@ where S::Timestamp: Lattice + Ord {
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Collection<S, LogRecord, isize>
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, (LogRecord, S::Timestamp, isize)>
 where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize> {
         // local edges:
-        // 2w, 10eif, 600e
-        // preprocessing + map + debug map: ~27
+            // preprocessing + map + debug map: ~27
         // preprocessing + map + arrange + debug map: ~33
         // preprocessing + map + arrange + join: ~40
 
@@ -181,14 +184,46 @@ where S::Timestamp: Lattice + Ord {
             .concat(&self.make_data_edges())
     }
 
-    // this should scale with epoch size, as it can update incrementally
-    // however, it takes longer than simple timely computations
     fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize> {
-        let edge_start = self.map(|x| ((x.local_worker, x.epoch, x.seq_no), x)).arrange_by_key();
-        let edge_end = self.map(|x| ((x.local_worker, x.epoch, x.seq_no + 1), x)).arrange_by_key();
+        // A differential join looks nicer and doesn't depend on order, but is
+        // ~7x slower. Getting its semantics right is also tricky, since some `seq_no`s
+        // are cut up due to `peel_ops`.
 
-        edge_start
-            .join_core(&edge_end, |_key, curr, prev| Some(Self::build_local_edge(&prev, &curr)))
+        let mut vector = Vec::new();
+        let mut buffer: HashMap<usize, (LogRecord, S::Timestamp)> = HashMap::new();
+        let mut total = 0;
+
+        self.unary_frontier(Pipeline, "Local Edges", move |_, _| { move |input, output| {
+            let timer = std::time::Instant::now();
+
+            input.for_each(|cap, data| {
+                data.swap(&mut vector);
+                for (lr, t, diff) in vector.drain(..) {
+                    assert!(diff == 1);
+
+                    let local_worker = lr.local_worker as usize;
+
+                    if let Some((prev_lr, prev_t)) = buffer.get(&local_worker) {
+                        // we've seen a lr from this local_worker before
+
+                        assert!(prev_t.first == t.first || t.first > prev_t.first);
+
+                        if prev_t.first == t.first {
+                            // only join lrs within an epoch
+                            output.session(&cap).give((Self::build_local_edge(&prev_lr, &lr), t.clone(), 1));
+                        }
+                    }
+
+                    buffer.insert(local_worker, (lr, t));
+                }
+            });
+
+            total += timer.elapsed().as_nanos();
+            if input.frontier().is_empty() {
+                println!("w{} local edges time: {}ms", index, total / 1_000_000);
+            }
+        }})
+            .as_collection()
     }
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
@@ -226,18 +261,20 @@ where S::Timestamp: Lattice + Ord {
 
     fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
         let sent = self
-            .filter(|x| {
+            .filter(|(x, _t, _diff)| {
                 x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
             })
-            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x))
+            .map(|(x, t, diff)| (((x.local_worker, x.correlator_id, x.channel_id), x), t, diff))
+            .as_collection()
             .arrange_by_key();
 
         let received = self
-            .filter(|x| {
+            .filter(|(x, _t, _diff)| {
                 x.activity_type == ActivityType::ControlMessage
                     && x.event_type == EventType::Received
             })
-            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x))
+            .map(|(x, t, diff)| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x), t, diff))
+            .as_collection()
             .arrange_by_key();
 
         sent.join_core(&received, |_key, from, to| Some(PagEdge {
@@ -251,16 +288,18 @@ where S::Timestamp: Lattice + Ord {
 
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
         let sent = self
-            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x))
+            .filter(|(x, _t, _diff)| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+            .map(|(x, t, diff)| (((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x), t, diff))
+            .as_collection()
             .arrange_by_key();
 
         let received = self
-            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x))
+            .filter(|(x, _t, _diff)| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+            .map(|(x, t, diff)| (((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x), t, diff))
+            .as_collection()
             .arrange_by_key();
 
-        sent.join_core(&received, |key, from, to| Some(PagEdge {
+        sent.join_core(&received, |_key, from, to| Some(PagEdge {
             source: PagNode::from(from),
             destination: PagNode::from(to),
             edge_type: ActivityType::DataMessage,
