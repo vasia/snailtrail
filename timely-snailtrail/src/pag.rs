@@ -182,6 +182,83 @@ where S::Timestamp: Lattice + Ord {
             .make_local_edges(index)
             .concat(&self.make_control_edges())
             .concat(&self.make_data_edges())
+            // the following timely join on triangles 30K, 2w, 2lbf (134s) -> ST: 2 4 1
+            // takes ~14s, while the same join implemented with differential takes ~16s
+            // -> just use differential
+        // let sent = self
+        //     .filter(|(x, _t, _diff)| {
+        //         x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
+        //     })
+        //     .map(|(x, t, diff)| ((x.local_worker, x.correlator_id, x.channel_id), x));
+
+        // let received = self
+        //     .filter(|(x, _t, _diff)| {
+        //         x.activity_type == ActivityType::ControlMessage
+        //             && x.event_type == EventType::Received
+        //     })
+        //     .map(|(x, t, diff)| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+
+        // use std::collections::hash_map::DefaultHasher;
+        // use std::hash::{Hash, Hasher};
+        // let sent_exchange = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
+        //     let mut s = DefaultHasher::new();
+        //     x.hash(&mut s);
+        //     s.finish()
+        // });
+        // let received_exchange = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
+        //     let mut s = DefaultHasher::new();
+        //     x.hash(&mut s);
+        //     s.finish()
+        // });
+
+        // use timely::dataflow::operators::inspect::Inspect;
+        // sent.binary(&received, sent_exchange, received_exchange, "HashJoin", |_capability, _info| {
+        //     let mut map1 = HashMap::new();
+        //     let mut map2 = HashMap::<(u64, Option<u64>, Option<u64>), Vec<LogRecord>>::new();
+
+        //     let mut vector1 = Vec::new();
+        //     let mut vector2 = Vec::new();
+
+        //     move |input1, input2, output| {
+        //         // Drain first input, check second map, update first map.
+        //         input1.for_each(|time, data| {
+        //             data.swap(&mut vector1);
+        //             let mut session = output.session(&time);
+        //             for (key, val1) in vector1.drain(..) {
+        //                 if let Some(values) = map2.get(&key) {
+        //                     for val2 in values.iter() {
+        //                         session.give((val1.clone(), val2.clone()));
+        //                     }
+        //                 }
+
+        //                 map1.entry(key).or_insert(Vec::new()).push(val1);
+        //             }
+        //         });
+
+        //         // Drain second input, check first map, update second map.
+        //         input2.for_each(|time, data| {
+        //             data.swap(&mut vector2);
+        //             let mut session = output.session(&time);
+        //             for (key, val2) in vector2.drain(..) {
+        //                 if let Some(values) = map1.get(&key) {
+        //                     for val1 in values.iter() {
+        //                         session.give((val1.clone(), val2.clone()));
+        //                     }
+        //                 }
+
+        //                 map2.entry(key).or_insert(Vec::new()).push(val2);
+        //             }
+        //         });
+        //     }
+        // })
+        //     .map(|(from, to)| (PagEdge {
+        //     source: PagNode::from(&from),
+        //     destination: PagNode::from(&to),
+        //     edge_type: ActivityType::ControlMessage,
+        //     operator_id: None,
+        //     traverse: TraversalType::Unbounded,
+        // }, Default::default(), 1))
+        //     .as_collection()
     }
 
     fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize> {
@@ -206,7 +283,8 @@ where S::Timestamp: Lattice + Ord {
                     if let Some((prev_lr, prev_t)) = buffer.get(&local_worker) {
                         // we've seen a lr from this local_worker before
 
-                        assert!(prev_t.first == t.first || t.first > prev_t.first);
+                        assert!(prev_t.first == t.first || t.first > prev_t.first,
+                                format!("w{}: {:?} should happen before {:?}", index, prev_t.first, t.first));
 
                         if prev_t.first == t.first {
                             // only join lrs within an epoch
