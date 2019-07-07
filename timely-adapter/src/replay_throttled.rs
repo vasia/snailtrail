@@ -26,6 +26,8 @@
 
 //! Custom replay operator that supports stopping replay arbitrarily
 //! and throttling the number of epochs in flight that are introduced by it.
+//! It also provides events in order from multiple files. For this to work
+//! properly, all events of one epoch have to be written to the same file.
 
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 
@@ -40,6 +42,8 @@ use logformat::pair::Pair;
 use std::time::Duration;
 
 /// Replay a capture stream into a scope with the same timestamp.
+/// This replay operator preserves ordering across an arbitrary amount of files,
+/// and can control how many epochs should be put into flight simultaneously.
 pub trait ReplayThrottled<D: Data + std::fmt::Debug> {
     /// Replays `self` into the provided scope, as a `Stream<S, D>`.
     fn replay_throttled_into<S: Scope<Timestamp=Pair<u64, Duration>>>(self, worker: usize, scope: &mut S, is_running: Option<Arc<AtomicBool>>, epochs_in_flight: u64) -> Stream<S, D>;
@@ -49,7 +53,6 @@ impl<D: Data + std::fmt::Debug, I> ReplayThrottled<D> for I
 where I : IntoIterator,
       <I as IntoIterator>::Item: EventIterator<Pair<u64, Duration>, D>+'static {
     fn replay_throttled_into<S: Scope<Timestamp=Pair<u64, Duration>>>(self, worker: usize, scope: &mut S, is_running: Option<Arc<AtomicBool>>, epochs_in_flight: u64) -> Stream<S, D> {
-
         let mut builder = OperatorBuilder::new("ReplayThrottled".to_owned(), scope.clone());
 
         let address = builder.operator_info().address;
@@ -60,11 +63,8 @@ where I : IntoIterator,
         let mut output = PushBuffer::new(PushCounter::new(targets));
         let mut event_streams = self.into_iter().collect::<Vec<_>>();
 
-        let len = event_streams.len();
-        let mut buffer = Vec::with_capacity(len);
-        for _ in 0 .. len {
-            buffer.push(Vec::new());
-        }
+        let mut buffer: Vec<(_, _)> = Vec::new();
+        let mut future_progress: Vec<Vec<(Pair<_,_>, i64)>> = Vec::new();
 
         let mut antichain: MutableAntichain<Pair<u64, Duration>> = MutableAntichain::new();
 
@@ -100,59 +100,54 @@ where I : IntoIterator,
                     let frontier = frontier.get(0);
 
                     if let Some(f) = frontier {
-
-                        // loops as long as we haven't read in `epochs_in_flight` epochs
-                        let mut should_continue = true;
-                        while should_continue {
-                            for (idx, event_stream) in event_streams.iter_mut().enumerate() {
-                                while let Some(event) = event_stream.next() {
-                                    buffer[idx].push(event.clone());
-
-                                    if let Event::Progress(ref vec) = event {
-                                        let epoch = vec[0].0.first;
-
-                                        // yield once enough epochs are in flight,
-                                        // or if we're retracting all capabilities
-                                        if (epoch > f.first + (epochs_in_flight - 1)) || vec[0].1 < 0 {
-                                            should_continue = false;
-                                        }
-
-                                        // progress to next stream after each epoch
-                                        if epoch > f.first {
-                                            break;
-                                        }
-                                    }
-                                }
+                        // apply future progress where possible
+                        future_progress.iter().for_each(|vec| {
+                            if vec[0].0.first <= f.first + epochs_in_flight {
+                                antichain.update_iter(vec.iter().cloned());
+                                internal[0].extend(vec.iter().cloned());
                             }
+                        });
+                        future_progress.retain(|vec| vec[0].0.first > f.first + epochs_in_flight);
 
-                            // sort by epoch time
-                            buffer.sort_by_key(|events| {
-                                if let Some(event) = events.get(0) {
-                                    match event {
-                                        Event::Progress(ref vec) => vec[0].0.first,
-                                        Event::Messages(ref time, _data) => time.first
-                                    }
-                                } else { 0 }
-                            });
-
-                            // provide sorted events to computation
-                            for events in buffer.iter_mut() {
-                                for event in events.drain(..) {
-                                    match event {
-                                        Event::Progress(ref vec) => {
-                                            let epoch = vec[0].0.first;
-
+                        // consume new events
+                        for event_stream in event_streams.iter_mut() {
+                            while let Some(event) = event_stream.next() {
+                                match event {
+                                    Event::Progress(ref vec) => {
+                                        if vec[0].0.first <= f.first + epochs_in_flight {
                                             antichain.update_iter(vec.iter().cloned());
                                             internal[0].extend(vec.iter().cloned());
-                                        },
-                                        Event::Messages(ref time, ref data) => {
-                                            total_events += 1;
-                                            output.session(time).give_iterator(data.iter().cloned());
+                                        } else {
+                                            future_progress.push(vec.clone());
+                                            break;
                                         }
-                                    }
+                                    },
+                                    Event::Messages(time, data) => { buffer.push((time.clone(), data.clone())); }
                                 }
                             }
+                        }
 
+                        // sort buffered events by epoch time
+                        buffer.sort_by_key(|(time, _data)| time.first);
+
+                        // update frontier information
+                        let curr_f = antichain.frontier().to_vec();
+                        let curr_f = curr_f.get(0);
+
+                        // write out buffered events up to the frontier
+                        if let Some(curr_f) = curr_f {
+                            buffer.iter().for_each(|(time, data)| {
+                                if time <= curr_f {
+                                    total_events += data.len();
+                                    output.session(&time).give_iterator(data.iter().cloned());
+                                }
+                            });
+                            buffer.retain(|(time, _data)| time > curr_f);
+                        } else {
+                            for (time, data) in buffer.drain(..) {
+                                total_events += data.len();
+                                output.session(&time).give_iterator(data.iter().cloned());
+                            }
                         }
                     } else {
                         if !done {
