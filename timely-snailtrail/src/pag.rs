@@ -11,7 +11,6 @@ use itertools::Itertools;
 
 use differential_dataflow::{collection::AsCollection, operators::join::Join, Collection};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::reduce::Count;
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 use timely::dataflow::channels::pact::Pipeline;
@@ -20,6 +19,7 @@ use timely::dataflow::Stream;
 use timely::dataflow::operators::filter::Filter;
 use timely::dataflow::operators::map::Map;
 use timely::dataflow::operators::inspect::Inspect;
+use timely::dataflow::operators::concat::Concat;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
@@ -137,7 +137,7 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read> 
     index: usize,
     throttle: u64,
     probe: &mut Handle<S::Timestamp>,
-) -> Collection<S, PagEdge, isize>
+) -> Stream<S, (PagEdge, S::Timestamp, isize)>
 where S::Timestamp: Lattice + Ord {
     create_lrs(scope, replayers, index, throttle)
         .probe_with(probe)
@@ -163,24 +163,24 @@ pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>>
 where S::Timestamp: Lattice + Ord {
     /// Builds a PAG from `LogRecord` by concatenating local edges, control edges
     /// and data edges.
-    fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize>;
+    fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
     /// Takes `LogRecord`s and connects local edges (per epoch, per worker)
-    fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize>;
+    fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
     /// Helper to create a `PagEdge` from two `LogRecord`s
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
     /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
     fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
     /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
-    fn make_control_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize>;
+    fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
     /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
     /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    fn make_data_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize>;
+    fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord>
 where S::Timestamp: Lattice + Ord {
-    fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize> {
+    fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         self.make_local_edges(index)
             // .concat(&self.make_control_edges())
             .concat(&self.make_control_edges_new(index))
@@ -188,7 +188,7 @@ where S::Timestamp: Lattice + Ord {
             .concat(&self.make_data_edges_new(index))
     }
 
-    fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize> {
+    fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         // A differential join looks nicer and doesn't depend on order, but is
         // ~7x slower. Getting its semantics right is also tricky, since some `seq_no`s
         // are cut up due to `peel_ops`.
@@ -226,7 +226,6 @@ where S::Timestamp: Lattice + Ord {
                 println!("w{} local edges time: {}ms", index, total / 1_000_000);
             }
         }})
-            .as_collection()
     }
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
@@ -290,7 +289,7 @@ where S::Timestamp: Lattice + Ord {
     }
 
     // @TODO: unify w/ make_data_edges_new
-    fn make_control_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize> {
+    fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         let sent = self
             .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
@@ -373,7 +372,6 @@ where S::Timestamp: Lattice + Ord {
                 operator_id: None,
                 traverse: TraversalType::Unbounded,
             }, t, 1))
-            .as_collection()
     }
 
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
@@ -399,7 +397,7 @@ where S::Timestamp: Lattice + Ord {
     }
 
     // @TODO: unify w/ make_control_edges_new
-    fn make_data_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize> {
+    fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         let sent = self
             .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
             .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
@@ -477,6 +475,5 @@ where S::Timestamp: Lattice + Ord {
                 operator_id: None, // @TODO could be used to store op info
                 traverse: TraversalType::Unbounded
             }, t, 1))
-            .as_collection()
     }
 }
