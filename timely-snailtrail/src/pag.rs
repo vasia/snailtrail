@@ -4,11 +4,14 @@
 use std::collections::HashMap;
 use std::{io::Read, time::Duration};
 use std::cmp::Ordering;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use itertools::Itertools;
 
 use differential_dataflow::{collection::AsCollection, operators::join::Join, Collection};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::reduce::Count;
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 use timely::dataflow::channels::pact::Pipeline;
@@ -16,6 +19,7 @@ use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::Stream;
 use timely::dataflow::operators::filter::Filter;
 use timely::dataflow::operators::map::Map;
+use timely::dataflow::operators::inspect::Inspect;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
@@ -166,99 +170,22 @@ where S::Timestamp: Lattice + Ord {
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
     /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
     fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
+    /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
+    fn make_control_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize>;
     /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
+    /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
+    fn make_data_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, (LogRecord, S::Timestamp, isize)>
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord>
 where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Collection<S, PagEdge, isize> {
-        // local edges:
-            // preprocessing + map + debug map: ~27
-        // preprocessing + map + arrange + debug map: ~33
-        // preprocessing + map + arrange + join: ~40
-
-        self
-            .make_local_edges(index)
-            .concat(&self.make_control_edges())
-            .concat(&self.make_data_edges())
-            // the following timely join on triangles 30K, 2w, 2lbf (134s) -> ST: 2 4 1
-            // takes ~14s, while the same join implemented with differential takes ~16s
-            // -> just use differential
-        // let sent = self
-        //     .filter(|(x, _t, _diff)| {
-        //         x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
-        //     })
-        //     .map(|(x, t, diff)| ((x.local_worker, x.correlator_id, x.channel_id), x));
-
-        // let received = self
-        //     .filter(|(x, _t, _diff)| {
-        //         x.activity_type == ActivityType::ControlMessage
-        //             && x.event_type == EventType::Received
-        //     })
-        //     .map(|(x, t, diff)| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
-
-        // use std::collections::hash_map::DefaultHasher;
-        // use std::hash::{Hash, Hasher};
-        // let sent_exchange = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
-        //     let mut s = DefaultHasher::new();
-        //     x.hash(&mut s);
-        //     s.finish()
-        // });
-        // let received_exchange = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
-        //     let mut s = DefaultHasher::new();
-        //     x.hash(&mut s);
-        //     s.finish()
-        // });
-
-        // use timely::dataflow::operators::inspect::Inspect;
-        // sent.binary(&received, sent_exchange, received_exchange, "HashJoin", |_capability, _info| {
-        //     let mut map1 = HashMap::new();
-        //     let mut map2 = HashMap::<(u64, Option<u64>, Option<u64>), Vec<LogRecord>>::new();
-
-        //     let mut vector1 = Vec::new();
-        //     let mut vector2 = Vec::new();
-
-        //     move |input1, input2, output| {
-        //         // Drain first input, check second map, update first map.
-        //         input1.for_each(|time, data| {
-        //             data.swap(&mut vector1);
-        //             let mut session = output.session(&time);
-        //             for (key, val1) in vector1.drain(..) {
-        //                 if let Some(values) = map2.get(&key) {
-        //                     for val2 in values.iter() {
-        //                         session.give((val1.clone(), val2.clone()));
-        //                     }
-        //                 }
-
-        //                 map1.entry(key).or_insert(Vec::new()).push(val1);
-        //             }
-        //         });
-
-        //         // Drain second input, check first map, update second map.
-        //         input2.for_each(|time, data| {
-        //             data.swap(&mut vector2);
-        //             let mut session = output.session(&time);
-        //             for (key, val2) in vector2.drain(..) {
-        //                 if let Some(values) = map1.get(&key) {
-        //                     for val1 in values.iter() {
-        //                         session.give((val1.clone(), val2.clone()));
-        //                     }
-        //                 }
-
-        //                 map2.entry(key).or_insert(Vec::new()).push(val2);
-        //             }
-        //         });
-        //     }
-        // })
-        //     .map(|(from, to)| (PagEdge {
-        //     source: PagNode::from(&from),
-        //     destination: PagNode::from(&to),
-        //     edge_type: ActivityType::ControlMessage,
-        //     operator_id: None,
-        //     traverse: TraversalType::Unbounded,
-        // }, Default::default(), 1))
-        //     .as_collection()
+        self.make_local_edges(index)
+            // .concat(&self.make_control_edges())
+            .concat(&self.make_control_edges_new(index))
+            // .concat(&self.make_data_edges())
+            .concat(&self.make_data_edges_new(index))
     }
 
     fn make_local_edges(&self, index: usize) -> Collection<S, PagEdge, isize> {
@@ -267,7 +194,7 @@ where S::Timestamp: Lattice + Ord {
         // are cut up due to `peel_ops`.
 
         let mut vector = Vec::new();
-        let mut buffer: HashMap<usize, (LogRecord, S::Timestamp)> = HashMap::new();
+        let mut buffer: HashMap<usize, LogRecord> = HashMap::new();
         let mut total = 0;
 
         self.unary_frontier(Pipeline, "Local Edges", move |_, _| { move |input, output| {
@@ -275,24 +202,22 @@ where S::Timestamp: Lattice + Ord {
 
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
-                for (lr, t, diff) in vector.drain(..) {
-                    assert!(diff == 1);
-
+                for lr in vector.drain(..) {
                     let local_worker = lr.local_worker as usize;
 
-                    if let Some((prev_lr, prev_t)) = buffer.get(&local_worker) {
+                    if let Some(prev_lr) = buffer.get(&local_worker) {
                         // we've seen a lr from this local_worker before
 
-                        assert!(prev_t.first == t.first || t.first > prev_t.first,
-                                format!("w{}: {:?} should happen before {:?}", index, prev_t.first, t.first));
+                        assert!(prev_lr.epoch == lr.epoch || lr.epoch > prev_lr.epoch,
+                                format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
 
-                        if prev_t.first == t.first {
+                        if prev_lr.epoch == lr.epoch {
                             // only join lrs within an epoch
-                            output.session(&cap).give((Self::build_local_edge(&prev_lr, &lr), t.clone(), 1));
+                            output.session(&cap).give((Self::build_local_edge(&prev_lr, &lr), cap.time().clone(), 1));
                         }
                     }
 
-                    buffer.insert(local_worker, (lr, t));
+                    buffer.insert(local_worker, lr);
                 }
             });
 
@@ -339,19 +264,19 @@ where S::Timestamp: Lattice + Ord {
 
     fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
         let sent = self
-            .filter(|(x, _t, _diff)| {
+            .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
             })
-            .map(|(x, t, diff)| (((x.local_worker, x.correlator_id, x.channel_id), x), t, diff))
+            .map(|x| (((x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
             .as_collection()
             .arrange_by_key();
 
         let received = self
-            .filter(|(x, _t, _diff)| {
+            .filter(|x| {
                 x.activity_type == ActivityType::ControlMessage
                     && x.event_type == EventType::Received
             })
-            .map(|(x, t, diff)| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x), t, diff))
+            .map(|x| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
             .as_collection()
             .arrange_by_key();
 
@@ -364,16 +289,103 @@ where S::Timestamp: Lattice + Ord {
         }))
     }
 
+    // @TODO: unify w/ make_data_edges_new
+    fn make_control_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize> {
+        let sent = self
+            .filter(|x| {
+                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
+            })
+            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
+
+        let received = self
+            .filter(|x| {
+                x.activity_type == ActivityType::ControlMessage
+                    && x.event_type == EventType::Received
+            })
+            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+
+        let exchange = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
+            let mut s = DefaultHasher::new();
+            x.hash(&mut s);
+            s.finish()
+        });
+
+        let exchange2 = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
+            let mut s = DefaultHasher::new();
+            x.hash(&mut s);
+            s.finish()
+        });
+
+        sent.binary(&received, exchange, exchange2, "HashJoin", |_capability, _info| {
+            let mut map1 = HashMap::new();
+            let mut map2 = HashMap::<(u64, Option<u64>, Option<u64>), Vec<LogRecord>>::new();
+
+            let mut vector1 = Vec::new();
+            let mut vector2 = Vec::new();
+
+            let mut total = 0;
+
+            move |input1, input2, output| {
+                let timer = std::time::Instant::now();
+
+                // Drain first input, check second map, update first map.
+                input1.for_each(|cap, data| {
+                    data.swap(&mut vector1);
+                    let mut session = output.session(&cap);
+                    for (key, val1) in vector1.drain(..) {
+                        if let Some(values) = map2.get(&key) {
+                            for val2 in values.iter() {
+                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                            }
+                        }
+
+                        map1.entry(key).or_insert(Vec::new()).push(val1);
+                    }
+
+                    if cap.time().first > 29998 {
+                        total += timer.elapsed().as_nanos();
+                        println!("w{} control edges join time: {}ms", index, total / 1_000_000);
+                    }
+                });
+
+                // Drain second input, check first map, update second map.
+                input2.for_each(|cap, data| {
+                    data.swap(&mut vector2);
+                    let mut session = output.session(&cap);
+                    for (key, val2) in vector2.drain(..) {
+                        if let Some(values) = map1.get(&key) {
+                            for val1 in values.iter() {
+                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                            }
+                        }
+
+                        map2.entry(key).or_insert(Vec::new()).push(val2);
+                    }
+                });
+
+                total += timer.elapsed().as_nanos();
+            }
+        })
+            .map(|(from, to, t)| (PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: ActivityType::ControlMessage,
+                operator_id: None,
+                traverse: TraversalType::Unbounded,
+            }, t, 1))
+            .as_collection()
+    }
+
     fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
         let sent = self
-            .filter(|(x, _t, _diff)| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-            .map(|(x, t, diff)| (((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x), t, diff))
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+            .map(|x| (((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
             .as_collection()
             .arrange_by_key();
 
         let received = self
-            .filter(|(x, _t, _diff)| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-            .map(|(x, t, diff)| (((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x), t, diff))
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+            .map(|x| (((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
             .as_collection()
             .arrange_by_key();
 
@@ -384,5 +396,87 @@ where S::Timestamp: Lattice + Ord {
             operator_id: None, // @TODO could be used to store op info
             traverse: TraversalType::Unbounded
         }))
+    }
+
+    // @TODO: unify w/ make_control_edges_new
+    fn make_data_edges_new(&self, index: usize) -> Collection<S, PagEdge, isize> {
+        let sent = self
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+
+        let received = self
+            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x));
+
+        let exchange = Exchange::new(|(x, _): &((u64, u64, Option<u64>, Option<u64>), LogRecord)| {
+            let mut s = DefaultHasher::new();
+            x.hash(&mut s);
+            s.finish()
+        });
+
+        let exchange2 = Exchange::new(|(x, _): &((u64, u64, Option<u64>, Option<u64>), LogRecord)| {
+            let mut s = DefaultHasher::new();
+            x.hash(&mut s);
+            s.finish()
+        });
+
+        sent.binary(&received, exchange, exchange2, "HashJoin", |_capability, _info| {
+            let mut map1 = HashMap::new();
+            let mut map2 = HashMap::<(u64, u64, Option<u64>, Option<u64>), Vec<LogRecord>>::new();
+
+            let mut vector1 = Vec::new();
+            let mut vector2 = Vec::new();
+
+            let mut total = 0;
+
+            move |input1, input2, output| {
+                let timer = std::time::Instant::now();
+
+                // Drain first input, check second map, update first map.
+                input1.for_each(|cap, data| {
+                    data.swap(&mut vector1);
+                    let mut session = output.session(&cap);
+                    for (key, val1) in vector1.drain(..) {
+                        if let Some(values) = map2.get(&key) {
+                            for val2 in values.iter() {
+                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                            }
+                        }
+
+                        map1.entry(key).or_insert(Vec::new()).push(val1);
+                    }
+
+                    if cap.time().first > 29998 {
+                        total += timer.elapsed().as_nanos();
+                        println!("w{} data edges join time: {}ms", index, total / 1_000_000);
+                    }
+                });
+
+                // Drain second input, check first map, update second map.
+                input2.for_each(|cap, data| {
+                    data.swap(&mut vector2);
+                    let mut session = output.session(&cap);
+                    for (key, val2) in vector2.drain(..) {
+                        if let Some(values) = map1.get(&key) {
+                            for val1 in values.iter() {
+                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                            }
+                        }
+
+                        map2.entry(key).or_insert(Vec::new()).push(val2);
+                    }
+                });
+
+                total += timer.elapsed().as_nanos();
+            }
+        })
+            .map(|(from, to, t)| (PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: ActivityType::DataMessage,
+                operator_id: None, // @TODO could be used to store op info
+                traverse: TraversalType::Unbounded
+            }, t, 1))
+            .as_collection()
     }
 }

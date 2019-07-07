@@ -48,7 +48,7 @@ pub fn create_lrs<S, R>(
     replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
     throttle: u64,
-) -> Stream<S, (LogRecord, S::Timestamp, isize)>
+) -> Stream<S, LogRecord>
 where
     S: Scope<Timestamp = Pair<u64, Duration>>,
     S::Timestamp: Lattice + Ord,
@@ -62,22 +62,22 @@ where
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
 trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
     /// Constructs a stream of log records to be used in PAG construction from an event stream.
-    fn construct_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
+    fn construct_lrs(&self, index: usize) -> Stream<S, LogRecord>;
     /// Strips an event `Stream` of encompassing operators
     /// (e.g. the dataflow operator for every direct child,
     /// the surrounding iterate operators for loops).
     fn peel_ops(&self, index: usize) -> Stream<S, CompEvent>;
     /// Makes a stream of log records from an event stream.
-    fn make_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
+    fn make_lrs(&self, index: usize) -> Stream<S, LogRecord>;
     /// Builds a log record at differential time `time` from the supplied computation event.
-    fn build_lr<T: Lattice + Ord>(comp_event: CompEvent, time: T) -> Option<(LogRecord, T, isize)>;
+    fn build_lr(comp_event: CompEvent) -> Option<LogRecord>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
     for Stream<S, CompEvent>
     where S::Timestamp: Lattice + Ord
 {
-    fn construct_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
+    fn construct_lrs(&self, index: usize) -> Stream<S, LogRecord> {
         self.peel_ops(index)
             .make_lrs(index)
     }
@@ -127,7 +127,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
         }})
     }
 
-    fn make_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
+    fn make_lrs(&self, index: usize) -> Stream<S, LogRecord> {
         let mut vector = Vec::new();
         let mut total = 0;
 
@@ -135,7 +135,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
             let timer = std::time::Instant::now();
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
-                output.session(&cap).give_iterator(vector.drain(..).flat_map(|x| Self::build_lr(x, cap.time().clone()).into_iter()));
+                output.session(&cap).give_iterator(vector.drain(..).flat_map(|x| Self::build_lr(x).into_iter()));
                 // @TODO: handle retractions (record.1.first += 1; record.2 = -1)
 
                 if cap.time().first > 2996 {
@@ -147,7 +147,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
         }})
     }
 
-    fn build_lr<T: Lattice + Ord>(comp_event: CompEvent, time: T) -> Option<(LogRecord, T, isize)> {
+    fn build_lr(comp_event: CompEvent) -> Option<LogRecord> {
         let (epoch, seq_no, (t, wid, x)) = comp_event;
         match x {
             // Scheduling & Processing
@@ -158,8 +158,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     EventType::End
                 };
 
-                Some((
-                    LogRecord {
+                Some(LogRecord {
                         seq_no,
                         epoch,
                         timestamp: t,
@@ -170,10 +169,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                         operator_id: Some(event.id as u64),
                         channel_id: None,
                         correlator_id: None,
-                    },
-                    time,
-                    1,
-                ))
+                    })
             }
             // remote data messages
             Messages(event) => {
@@ -189,8 +185,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     EventType::Received
                 };
 
-                Some((
-                    LogRecord {
+                Some(LogRecord {
                         seq_no,
                         epoch,
                         timestamp: t,
@@ -201,10 +196,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                         operator_id: None,
                         channel_id: Some(event.channel as u64),
                         correlator_id: Some(event.seq_no as u64),
-                    },
-                    time,
-                    1,
-                ))
+                    })
             }
             // Control Messages
             Progress(event) => {
@@ -222,8 +214,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     Some(event.source as u64)
                 };
 
-                Some((
-                    LogRecord {
+                Some(LogRecord {
                         seq_no,
                         epoch,
                         timestamp: t,
@@ -234,10 +225,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                         operator_id: None,
                         channel_id: Some(event.channel as u64),
                         correlator_id: Some(event.seq_no as u64),
-                    },
-                    time,
-                    1,
-                ))
+                    })
             }
             // Channels / Operates events
             _ => None
