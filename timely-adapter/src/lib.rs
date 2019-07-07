@@ -48,7 +48,7 @@ pub fn create_lrs<S, R>(
     replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
     throttle: u64,
-) -> Collection<S, LogRecord, isize>
+) -> Stream<S, (LogRecord, S::Timestamp, isize)>
 where
     S: Scope<Timestamp = Pair<u64, Duration>>,
     S::Timestamp: Lattice + Ord,
@@ -61,8 +61,8 @@ where
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
 trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
-    /// Constructs a collection of log records to be used in PAG construction from an event stream.
-    fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize>;
+    /// Constructs a stream of log records to be used in PAG construction from an event stream.
+    fn construct_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)>;
     /// Strips an event `Stream` of encompassing operators
     /// (e.g. the dataflow operator for every direct child,
     /// the surrounding iterate operators for loops).
@@ -77,10 +77,9 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
     for Stream<S, CompEvent>
     where S::Timestamp: Lattice + Ord
 {
-    fn construct_lrs(&self, index: usize) -> Collection<S, LogRecord, isize> {
+    fn construct_lrs(&self, index: usize) -> Stream<S, (LogRecord, S::Timestamp, isize)> {
         self.peel_ops(index)
             .make_lrs(index)
-            .as_collection()
     }
 
     fn peel_ops(&self, index: usize) -> Stream<S, CompEvent> {
