@@ -222,6 +222,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
                         self.flush_to_all();
                     } else {
                         self.flush_buffer();
+                        self.curr_writer = (self.curr_writer + 1) % self.writers.len();
                     }
                 }
                 Operates(_) => {
@@ -317,7 +318,6 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
             self.writers[self.curr_writer].push(Event::Messages(self.curr_cap.clone(), std::mem::replace(&mut self.buffer, Vec::new())));
         }
 
-        self.curr_writer = (self.curr_writer + 1) % self.writers.len();
         self.fuel = MAX_FUEL;
         self.tick_sys = true;
     }
