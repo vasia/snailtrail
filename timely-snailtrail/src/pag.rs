@@ -20,6 +20,7 @@ use timely::dataflow::operators::filter::Filter;
 use timely::dataflow::operators::map::Map;
 use timely::dataflow::operators::inspect::Inspect;
 use timely::dataflow::operators::concat::Concat;
+use timely::Data;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
@@ -27,6 +28,8 @@ use timely_adapter::{connect::Replayer, create_lrs};
 
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
+
+use abomonation::Abomonation;
 
 /// A node in the PAG
 #[derive(Abomonation, Clone, PartialEq, Hash, Eq, Copy)]
@@ -168,24 +171,28 @@ where S::Timestamp: Lattice + Ord {
     fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
     /// Helper to create a `PagEdge` from two `LogRecord`s
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
-    /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
-    fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
-    /// Takes `LogRecord`s and connects control edges (per epoch, across workers)
-    fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
-    /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
-    /// Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
+    /// Takes `LogRecord`s and connects remote edges (per epoch, across workers)
+    fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
+    // Takes `LogRecord`s and connects control edges (per epoch, across workers)
+    // fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
+    // Takes `LogRecord`s and connects control edges (per epoch, across workers)
+    // fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
+    // Takes `LogRecord`s and connects data edges (per epoch, across workers)
+    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
+    // Takes `LogRecord`s and connects data edges (per epoch, across workers)
+    // fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord>
 where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         self.make_local_edges(index)
-            // .concat(&self.make_control_edges())
-            .concat(&self.make_control_edges_new(index))
-            // .concat(&self.make_data_edges())
-            .concat(&self.make_data_edges_new(index))
+            .concat(&self.make_remote_edges(index))
+
+            // .concat(&self.make_control_edges().inner)
+            // .concat(&self.make_control_edges_new(index))
+            // .concat(&self.make_data_edges().inner)
+            // .concat(&self.make_data_edges_new(index))
     }
 
     fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
@@ -261,166 +268,142 @@ where S::Timestamp: Lattice + Ord {
         }
     }
 
-    fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
+    fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
+        let narrowed = self.filter(|x| x.activity_type == ActivityType::ControlMessage || x.activity_type == ActivityType::DataMessage);
+
         let sent = self
-            .filter(|x| {
-                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
-            })
-            .map(|x| (((x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-            .as_collection()
-            .arrange_by_key();
-
-        let received = self
-            .filter(|x| {
-                x.activity_type == ActivityType::ControlMessage
-                    && x.event_type == EventType::Received
-            })
-            .map(|x| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-            .as_collection()
-            .arrange_by_key();
-
-        sent.join_core(&received, |_key, from, to| Some(PagEdge {
-            source: PagNode::from(from),
-            destination: PagNode::from(to),
-            edge_type: ActivityType::ControlMessage,
-            operator_id: None,
-            traverse: TraversalType::Unbounded,
-        }))
-    }
-
-    // @TODO: unify w/ make_data_edges_new
-    fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        let sent = self
-            .filter(|x| {
-                x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
-            })
+            .filter(|x| x.event_type == EventType::Sent)
             .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
-        let received = self
-            .filter(|x| {
-                x.activity_type == ActivityType::ControlMessage
-                    && x.event_type == EventType::Received
-            })
+        let received = self.filter(|x| x.event_type == EventType::Received)
             .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
-        let exchange = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
-            let mut s = DefaultHasher::new();
-            x.hash(&mut s);
-            s.finish()
-        });
-
-        let exchange2 = Exchange::new(|(x, _): &((u64, Option<u64>, Option<u64>), LogRecord)| {
-            let mut s = DefaultHasher::new();
-            x.hash(&mut s);
-            s.finish()
-        });
-
-        sent.binary(&received, exchange, exchange2, "HashJoin", |_capability, _info| {
-            let mut map1 = HashMap::new();
-            let mut map2 = HashMap::<(u64, Option<u64>, Option<u64>), Vec<LogRecord>>::new();
-
-            let mut vector1 = Vec::new();
-            let mut vector2 = Vec::new();
-
-            let mut total = 0;
-
-            move |input1, input2, output| {
-                let timer = std::time::Instant::now();
-
-                // Drain first input, check second map, update first map.
-                input1.for_each(|cap, data| {
-                    data.swap(&mut vector1);
-                    let mut session = output.session(&cap);
-                    for (key, val1) in vector1.drain(..) {
-                        if let Some(values) = map2.get(&key) {
-                            for val2 in values.iter() {
-                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
-                            }
-                        }
-
-                        map1.entry(key).or_insert(Vec::new()).push(val1);
-                    }
-
-                    if cap.time().first > 29998 {
-                        total += timer.elapsed().as_nanos();
-                        println!("w{} control edges join time: {}ms", index, total / 1_000_000);
-                    }
-                });
-
-                // Drain second input, check first map, update second map.
-                input2.for_each(|cap, data| {
-                    data.swap(&mut vector2);
-                    let mut session = output.session(&cap);
-                    for (key, val2) in vector2.drain(..) {
-                        if let Some(values) = map1.get(&key) {
-                            for val1 in values.iter() {
-                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
-                            }
-                        }
-
-                        map2.entry(key).or_insert(Vec::new()).push(val2);
-                    }
-                });
-
-                total += timer.elapsed().as_nanos();
-            }
-        })
+        sent.join_edges(index, &received)
             .map(|(from, to, t)| (PagEdge {
                 source: PagNode::from(&from),
                 destination: PagNode::from(&to),
-                edge_type: ActivityType::ControlMessage,
+                edge_type: from.activity_type,
                 operator_id: None,
                 traverse: TraversalType::Unbounded,
             }, t, 1))
     }
 
-    fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
-        let sent = self
-            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-            .map(|x| (((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-            .as_collection()
-            .arrange_by_key();
+    // fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
+    //     let sent = self
+    //         .filter(|x| {
+    //             x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
+    //         })
+    //         .map(|x| (((x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
+    //         .as_collection()
+    //         .arrange_by_key();
 
-        let received = self
-            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-            .map(|x| (((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-            .as_collection()
-            .arrange_by_key();
+    //     let received = self
+    //         .filter(|x| {
+    //             x.activity_type == ActivityType::ControlMessage
+    //                 && x.event_type == EventType::Received
+    //         })
+    //         .map(|x| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
+    //         .as_collection()
+    //         .arrange_by_key();
 
-        sent.join_core(&received, |_key, from, to| Some(PagEdge {
-            source: PagNode::from(from),
-            destination: PagNode::from(to),
-            edge_type: ActivityType::DataMessage,
-            operator_id: None, // @TODO could be used to store op info
-            traverse: TraversalType::Unbounded
-        }))
-    }
+    //     sent.join_core(&received, |_key, from, to| Some(PagEdge {
+    //         source: PagNode::from(from),
+    //         destination: PagNode::from(to),
+    //         edge_type: ActivityType::ControlMessage,
+    //         operator_id: None,
+    //         traverse: TraversalType::Unbounded,
+    //     }))
+    // }
 
-    // @TODO: unify w/ make_control_edges_new
-    fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        let sent = self
-            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-            .map(|x| ((x.local_worker, x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+    // fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
+    //     let sent = self
+    //         .filter(|x| x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent)
+    //         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
-        let received = self
-            .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-            .map(|x| ((x.remote_worker.unwrap(), x.local_worker, x.correlator_id, x.channel_id), x));
+    //     let received = self
+    //         .filter(|x| x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received)
+    //         .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
-        let exchange = Exchange::new(|(x, _): &((u64, u64, Option<u64>, Option<u64>), LogRecord)| {
-            let mut s = DefaultHasher::new();
-            x.hash(&mut s);
-            s.finish()
-        });
+    //     sent.join_edges(index, &received)
+    //         .map(|(from, to, t)| (PagEdge {
+    //             source: PagNode::from(&from),
+    //             destination: PagNode::from(&to),
+    //             edge_type: ActivityType::ControlMessage,
+    //             operator_id: None,
+    //             traverse: TraversalType::Unbounded,
+    //         }, t, 1))
+    // }
 
-        let exchange2 = Exchange::new(|(x, _): &((u64, u64, Option<u64>, Option<u64>), LogRecord)| {
-            let mut s = DefaultHasher::new();
-            x.hash(&mut s);
-            s.finish()
-        });
+    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
+    //     let sent = self
+    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+    //         .map(|x| (((x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
+    //         .as_collection()
+    //         .arrange_by_key();
 
-        sent.binary(&received, exchange, exchange2, "HashJoin", |_capability, _info| {
+    //     let received = self
+    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+    //         .map(|x| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
+    //         .as_collection()
+    //         .arrange_by_key();
+
+    //     sent.join_core(&received, |_key, from, to| Some(PagEdge {
+    //         source: PagNode::from(from),
+    //         destination: PagNode::from(to),
+    //         edge_type: ActivityType::DataMessage,
+    //         operator_id: None, // @TODO could be used to store op info
+    //         traverse: TraversalType::Unbounded
+    //     }))
+    // }
+
+    // fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
+    //     let sent = self
+    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
+    //         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
+
+    //     let received = self
+    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
+    //         .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+
+    //     sent
+    //         .join_edges(index, &received)
+    //         .map(|(from, to, t)| (PagEdge {
+    //             source: PagNode::from(&from),
+    //             destination: PagNode::from(&to),
+    //             edge_type: ActivityType::DataMessage,
+    //             operator_id: None, // @TODO could be used to store op info
+    //             traverse: TraversalType::Unbounded
+    //         }, t, 1))
+    // }
+}
+
+trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where S::Timestamp: Lattice + Ord, D: Data + Hash + Eq + Abomonation + Send + Sync {
+    fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)>;
+}
+
+impl<S: Scope<Timestamp = Pair<u64, Duration>>, D> JoinEdges<S, D>
+    for Stream<S, (D, LogRecord)>
+where S::Timestamp: Lattice + Ord, D: Data + Hash + Eq + Abomonation + Send + Sync
+{
+    fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)> {
+        // exchange by epoch doesn't make sense for low epoch_in_flight counts
+        // let exchange = Exchange::new(|(_, x): &(_, LogRecord)| x.epoch);
+        // let exchange2 = Exchange::new(|(_, x): &(_, LogRecord)| x.epoch);
+
+        // exchange by local / remote worker doesn't make sense for STw > TCw
+        // let exchange = Exchange::new(|(_, x): &(_, LogRecord)| x.local_worker);
+        // let exchange2 = Exchange::new(|(_, x): &(_, LogRecord)| x.remote_worker.unwrap());
+
+        // @TODO: exchange by correlator_id works, but is surprisingly slow
+        let exchange = Exchange::new(|(_, x): &(_, LogRecord)| x.correlator_id.expect("no corr id"));
+        let exchange2 = Exchange::new(|(_, x): &(_, LogRecord)| x.correlator_id.expect("no corr id"));
+
+        // @TODO: in this join implementation, state continually grows.
+        // To fix this, check frontier and remove all state that is from older epochs
+        // (cross-epochs join shouldn't happen anyways)
+        self.binary(&other, exchange, exchange2, "HashJoin", |_capability, _info| {
             let mut map1 = HashMap::new();
-            let mut map2 = HashMap::<(u64, u64, Option<u64>, Option<u64>), Vec<LogRecord>>::new();
+            let mut map2 = HashMap::<_, Vec<LogRecord>>::new();
 
             let mut vector1 = Vec::new();
             let mut vector2 = Vec::new();
@@ -446,11 +429,10 @@ where S::Timestamp: Lattice + Ord {
 
                     if cap.time().first > 29998 {
                         total += timer.elapsed().as_nanos();
-                        println!("w{} data edges join time: {}ms", index, total / 1_000_000);
+                        println!("w{} edges join time: {}ms (map1: {}, map2: {})", index, total / 1_000_000, map1.len(), map2.len());
                     }
                 });
 
-                // Drain second input, check first map, update second map.
                 input2.for_each(|cap, data| {
                     data.swap(&mut vector2);
                     let mut session = output.session(&cap);
@@ -468,12 +450,5 @@ where S::Timestamp: Lattice + Ord {
                 total += timer.elapsed().as_nanos();
             }
         })
-            .map(|(from, to, t)| (PagEdge {
-                source: PagNode::from(&from),
-                destination: PagNode::from(&to),
-                edge_type: ActivityType::DataMessage,
-                operator_id: None, // @TODO could be used to store op info
-                traverse: TraversalType::Unbounded
-            }, t, 1))
     }
 }
