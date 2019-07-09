@@ -19,16 +19,16 @@ fn main() {
             let (a, a_d) = scope.new_collection();
             let (b, b_d) = scope.new_collection();
 
-            let a_d2 = a_d.map(|x| (x, x));
-            let a_d = a_d2.arrange_by_key();
+            let a_d = a_d.map(|x| (x, x)).arrange_by_key();
+            // let a_d = a_d2.arrange_by_key();
             let b_d = b_d.map(|x| (x, x)).arrange_by_key();
 
             // 2w map + inspect: 15.4 (~650K / s)
-            // 2w map + join + inspect: ~120 (~80K / s)
-            // 2w map + arrange + join + inspect: ~120 (~80K / s)
             // 2w map + arrange + inspect: ~35.4 (~280K / s)
+            // 2w map + arrange + join + inspect: ~120 (~80K / s)
+            // 2w map + join + inspect: ~120 (~80K / s)
 
-            let probe = a_d2
+            let probe = a_d
                 // .join_core(&b_d, |_, &a, _| Some(a))
                 .inspect_batch(move |t, x| println!("w{}@{:?}", index, t))
                 .probe();
@@ -55,6 +55,7 @@ fn main() {
                 println!("{:?}", frontier);
                 worker.step();
             }
+
         }
 
         println!("w{} done", index);

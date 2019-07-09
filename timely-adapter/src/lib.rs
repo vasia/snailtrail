@@ -118,9 +118,9 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     }
                 }
 
-                if cap.time().first > 2996 {
+                if cap.time().first > 29996 {
                     total += timer.elapsed().as_nanos();
-                    println!("w{}@{:?} peel_ops time: {}ms", index, cap.time(), total / 1_000_000);
+                    // println!("w{} peel_ops time: {}ms", index, total / 1_000_000);
                 }
             });
             total += timer.elapsed().as_nanos();
@@ -138,9 +138,9 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                 output.session(&cap).give_iterator(vector.drain(..).flat_map(|x| Self::build_lr(x).into_iter()));
                 // @TODO: handle retractions (record.1.first += 1; record.2 = -1)
 
-                if cap.time().first > 2996 {
+                if cap.time().first > 29996 {
                     total += timer.elapsed().as_nanos();
-                    println!("w{}@{:?} make_lrs time: {}ms", index, cap.time(), total / 1_000_000);
+                    // println!("w{} make_lrs time: {}ms", index, total / 1_000_000);
                 }
             });
             total += timer.elapsed().as_nanos();
