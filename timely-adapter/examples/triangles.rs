@@ -31,12 +31,13 @@ fn main() {
     let filename = args.next().expect("file name");
     let batch_size = args.next().expect("missing batch size").parse::<usize>().unwrap();
     let load_balance_factor = args.next().expect("missing lbf").parse::<usize>().unwrap();
+    let max_fuel = args.next().expect("missing fuel").parse::<usize>().unwrap();
     let _ = args.next(); // --
 
     let args = args.collect::<Vec<_>>();
     timely::execute_from_args(args.clone().into_iter(), move |worker| {
         info!("triangles with args: {:?}, w{}, lbf {}", args, worker.peers(), load_balance_factor);
-        register_logger::<Pair<u64, Duration>>(worker, load_balance_factor);
+        register_logger::<Pair<u64, Duration>>(worker, load_balance_factor, max_fuel);
 
         let timer = std::time::Instant::now();
         let graph = GraphMMap::new(&filename);

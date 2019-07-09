@@ -49,7 +49,7 @@ pub type ReplayWriter<T, R> = EventWriter<T, CompEvent, R>;
 /// Logging of events to TCP or file.
 /// For live analysis, provide `SNAILTRAIL_ADDR` as env variable.
 /// Else, the computation will log to file for later replay.
-pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation> (worker: &mut Worker<Generic>, load_balance_factor: usize) {
+pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation> (worker: &mut Worker<Generic>, load_balance_factor: usize, max_fuel: usize) {
     assert!(load_balance_factor > 0);
 
     if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
@@ -67,7 +67,7 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
             })
             .collect::<Vec<_>>();
 
-        let mut pag_logger = PAGLogger::new(worker.index(), writers);
+        let mut pag_logger = PAGLogger::new(worker.index(), writers, max_fuel);
         worker
             .log_register()
             .insert::<TimelyEvent, _>("timely", move |_time, data| {
@@ -85,7 +85,7 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
             EventWriter::<T, _, _>::new(file)
         }).collect::<Vec<_>>();
 
-        let mut pag_logger = PAGLogger::new(worker.index(), writers);
+        let mut pag_logger = PAGLogger::new(worker.index(), writers, max_fuel);
         worker
             .log_register()
             .insert::<TimelyEvent, _>("timely", move |_time, data| {
@@ -132,7 +132,7 @@ impl NextEpoch for Pair<u64, Duration> {
     }
 }
 
-const MAX_FUEL: usize = 512;
+// const MAX_FUEL: usize = 512;
 
 // @TODO: for triangles query with round size == 1, the computation is slowed down by TCP.
 //        A reason for this might be the overhead in creating TCP packets, so it might be
@@ -171,6 +171,8 @@ struct PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + De
     /// Advances system time if it hasn't yet been advanced
     /// for the current progress batch.
     tick_sys: bool,
+    /// max fuel
+    max_fuel: usize,
     /// If a computation's epoch size exceeds `MAX_FUEL` events are batched
     /// into multiple processing times within that epoch.
     /// Received data messages don't use up fuel to avoid separating
@@ -186,7 +188,7 @@ struct PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + De
 
 impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation, W: 'static + Write {
     /// Creates a new PAG Logger.
-    pub fn new(worker_index: usize, writers: Vec<ReplayWriter<T, W>>) -> Self {
+    pub fn new(worker_index: usize, writers: Vec<ReplayWriter<T, W>>, max_fuel: usize) -> Self {
         PAGLogger {
             writers,
             curr_writer: 0,
@@ -195,7 +197,8 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
             seq_no: 0,
             buffer: Vec::new(),
             tick_sys: true,
-            fuel: MAX_FUEL,
+            max_fuel,
+            fuel: max_fuel,
             worker_index,
             overall_messages: 0,
             pag_messages: 0,
@@ -307,7 +310,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
         }
         self.buffer.drain(..);
 
-        self.fuel = MAX_FUEL;
+        self.fuel = self.max_fuel;
         self.tick_sys = true;
     }
 
@@ -315,10 +318,14 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
     fn flush_buffer(&mut self) {
         info!("w{} flush@{:?} to {} - count: {}", self.worker_index, self.curr_cap, self.curr_writer, self.buffer.len());
         if self.buffer.len() > 0 {
-            self.writers[self.curr_writer].push(Event::Messages(self.curr_cap.clone(), std::mem::replace(&mut self.buffer, Vec::new())));
+            if let Some(writer) = self.writers.get_mut(self.curr_writer) {
+                writer.push(Event::Messages(self.curr_cap.clone(), std::mem::replace(&mut self.buffer, Vec::new())));
+            } else {
+                panic!("couldn't get writer");
+            }
         }
 
-        self.fuel = MAX_FUEL;
+        self.fuel = self.max_fuel;
         self.tick_sys = true;
     }
 
