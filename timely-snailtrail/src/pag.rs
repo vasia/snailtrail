@@ -173,14 +173,6 @@ where S::Timestamp: Lattice + Ord {
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
     /// Takes `LogRecord`s and connects remote edges (per epoch, across workers)
     fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
-    // Takes `LogRecord`s and connects control edges (per epoch, across workers)
-    // fn make_control_edges(&self) -> Collection<S, PagEdge, isize>;
-    // Takes `LogRecord`s and connects control edges (per epoch, across workers)
-    // fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
-    // Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize>;
-    // Takes `LogRecord`s and connects data edges (per epoch, across workers)
-    // fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord>
@@ -188,11 +180,6 @@ where S::Timestamp: Lattice + Ord {
     fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         self.make_local_edges(index)
             .concat(&self.make_remote_edges(index))
-
-            // .concat(&self.make_control_edges().inner)
-            // .concat(&self.make_control_edges_new(index))
-            // .concat(&self.make_data_edges().inner)
-            // .concat(&self.make_data_edges_new(index))
     }
 
     fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
@@ -287,94 +274,6 @@ where S::Timestamp: Lattice + Ord {
                 traverse: TraversalType::Unbounded,
             }, t, 1))
     }
-
-    // fn make_control_edges(&self) -> Collection<S, PagEdge, isize> {
-    //     let sent = self
-    //         .filter(|x| {
-    //             x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent
-    //         })
-    //         .map(|x| (((x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-    //         .as_collection()
-    //         .arrange_by_key();
-
-    //     let received = self
-    //         .filter(|x| {
-    //             x.activity_type == ActivityType::ControlMessage
-    //                 && x.event_type == EventType::Received
-    //         })
-    //         .map(|x| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-    //         .as_collection()
-    //         .arrange_by_key();
-
-    //     sent.join_core(&received, |_key, from, to| Some(PagEdge {
-    //         source: PagNode::from(from),
-    //         destination: PagNode::from(to),
-    //         edge_type: ActivityType::ControlMessage,
-    //         operator_id: None,
-    //         traverse: TraversalType::Unbounded,
-    //     }))
-    // }
-
-    // fn make_control_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-    //     let sent = self
-    //         .filter(|x| x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Sent)
-    //         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
-
-    //     let received = self
-    //         .filter(|x| x.activity_type == ActivityType::ControlMessage && x.event_type == EventType::Received)
-    //         .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
-
-    //     sent.join_edges(index, &received)
-    //         .map(|(from, to, t)| (PagEdge {
-    //             source: PagNode::from(&from),
-    //             destination: PagNode::from(&to),
-    //             edge_type: ActivityType::ControlMessage,
-    //             operator_id: None,
-    //             traverse: TraversalType::Unbounded,
-    //         }, t, 1))
-    // }
-
-    // fn make_data_edges(&self) -> Collection<S, PagEdge, isize> {
-    //     let sent = self
-    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-    //         .map(|x| (((x.local_worker, x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-    //         .as_collection()
-    //         .arrange_by_key();
-
-    //     let received = self
-    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-    //         .map(|x| (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x.clone()), Pair::new(x.epoch, x.timestamp), 1 as isize))
-    //         .as_collection()
-    //         .arrange_by_key();
-
-    //     sent.join_core(&received, |_key, from, to| Some(PagEdge {
-    //         source: PagNode::from(from),
-    //         destination: PagNode::from(to),
-    //         edge_type: ActivityType::DataMessage,
-    //         operator_id: None, // @TODO could be used to store op info
-    //         traverse: TraversalType::Unbounded
-    //     }))
-    // }
-
-    // fn make_data_edges_new(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-    //     let sent = self
-    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Sent)
-    //         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
-
-    //     let received = self
-    //         .filter(|x| x.activity_type == ActivityType::DataMessage && x.event_type == EventType::Received)
-    //         .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
-
-    //     sent
-    //         .join_edges(index, &received)
-    //         .map(|(from, to, t)| (PagEdge {
-    //             source: PagNode::from(&from),
-    //             destination: PagNode::from(&to),
-    //             edge_type: ActivityType::DataMessage,
-    //             operator_id: None, // @TODO could be used to store op info
-    //             traverse: TraversalType::Unbounded
-    //         }, t, 1))
-    // }
 }
 
 trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where S::Timestamp: Lattice + Ord, D: Data + Hash + Eq + Abomonation + Send + Sync {
