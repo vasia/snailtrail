@@ -40,7 +40,7 @@ fn main() {
         info!("triangles with args: {:?}, w{}, lbf {}", args, worker.peers(), load_balance_factor);
         register_logger::<Pair<u64, Duration>>(worker, load_balance_factor, max_fuel);
 
-        let timer = std::time::Instant::now();
+        let mut timer = std::time::Instant::now();
         let graph = GraphMMap::new(&filename);
 
         let mut probe = Handle::new();
@@ -144,6 +144,7 @@ fn main() {
 
             if index == 0 {
                 info!("w{} {:?}\tEpoch {} complete, close times before: {:?}", index, timer.elapsed(), i, input.time());
+                timer = std::time::Instant::now();
             }
             if let Some(timely_logger) = &timely_logger {
                 timely_logger.log(TimelyEvent::Text(format!(

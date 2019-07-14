@@ -181,11 +181,17 @@ struct PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + De
     overall_messages: u64,
     /// For debugging (tracks per-epoch messages this pag logger wrote)
     pag_messages: u64,
+    /// For debugging (elapsed time)
+    elapsed: std::time::Instant,
 }
 
 impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation, W: 'static + Write {
     /// Creates a new PAG Logger.
     pub fn new(worker_index: usize, writers: Vec<ReplayWriter<T, W>>, max_fuel: usize) -> Self {
+        if worker_index == 0 {
+            info!("worker|epoch|elapsed [ms]|overall|pag");
+        }
+
         PAGLogger {
             writers,
             curr_writer: 0,
@@ -199,6 +205,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
             worker_index,
             overall_messages: 0,
             pag_messages: 0,
+            elapsed: std::time::Instant::now(),
         }
     }
 
@@ -211,7 +218,11 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
                 // Text events advance epochs, start and end logging
                 Text(e) => {
                     trace!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
-                    info!("w{}@{:?}, overall: {}, pag: {}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages);
+                    // info!("w{}@{:?}, overall: {}, pag: {}, elapsed: {:?}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages, self.elapsed.elapsed());
+                    if self.curr_cap.get_epoch() > 0 {
+                        println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.get_epoch() - 1, self.elapsed.elapsed().as_micros(), self.overall_messages, self.pag_messages);
+                    }
+                    self.elapsed = std::time::Instant::now();
                     self.overall_messages = 0;
                     self.pag_messages = 0;
 
