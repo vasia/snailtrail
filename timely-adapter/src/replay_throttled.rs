@@ -31,7 +31,7 @@
 
 use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
 
-use timely::{Data, dataflow::{Scope, Stream}, progress::Timestamp};
+use timely::{Data, dataflow::{Scope, Stream}};
 use timely::dataflow::channels::pushers::{Counter as PushCounter, buffer::Buffer as PushBuffer};
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::progress::frontier::MutableAntichain;

@@ -2,12 +2,9 @@
 extern crate log;
 
 use timely_snailtrail::{pag, Config};
-use timely_snailtrail::pag::DumpPAG;
 
 use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
-use timely::dataflow::operators::capture::replay::Replay;
-use timely_adapter::replay_throttled::ReplayThrottled;
 use timely::dataflow::operators::capture::EventReader;
 
 use std::time::Duration;
@@ -18,19 +15,6 @@ use logformat::pair::Pair;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
-
-use timely::dataflow::operators::generic::operator::Operator;
-use timely::dataflow::operators::generic::OutputHandle;
-use timely_snailtrail::pag::PagEdge;
-use std::time::Instant;
-use timely::logging::TimelyEvent;
-use logformat::LogRecord;
-use timely::dataflow::operators::map::Map;
-use timely::dataflow::operators::inspect::Inspect;
-
-use differential_dataflow::logging::DifferentialEvent;
-use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::reduce::Count;
 
 fn main() {
     env_logger::init();
@@ -72,47 +56,18 @@ fn inspector(config: Config) {
         let index = worker.index();
         if index == 0 {println!("{:?}", &config);}
 
-        // worker
-        //     .log_register()
-        //     .insert::<DifferentialEvent, _>("differential/arrange", move |time, data| {
-        //         if data.len() > 0 {
-        //             let res = data.into_iter().fold(0, |mut acc, x| {
-        //                 match &x.2 {
-        //                     DifferentialEvent::Batch(b) => { acc += b.length; acc },
-        //                     _ => acc
-        //                 }
-        //             });
-        //             println!("w{},{:?}", index, res);
-        //         }
-        //     });
-
         // read replayers from file (offline) or TCP stream (online)
         let readers: Vec<EventReader<_, timely_adapter::connect::CompEvent, _>> =
             connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
-        let mut test_probe = timely::dataflow::operators::probe::Handle::new();
-
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
-            pag::create_pag(scope, readers, index, config.throttle, &mut test_probe)
-                .as_collection()
-                .map(|x| x.source.epoch)
-                .count()
-                .inspect(|x| if x.1.first % 100 == 0 {println!("count {:?}", x)})
+            pag::create_pag(scope, readers, index, config.throttle)
                 .probe()
-
-            // timely_adapter::create_lrs(scope, readers, index, config.throttle)
-                // .probe()
         });
 
         // let mut timer = std::time::Instant::now();
         // while probe.less_equal(&Pair::new(2, std::time::Duration::from_secs(0))) {
         while !probe.done() {
-            // test_probe.with_frontier(|f| {
-            //     let f = f.to_vec();
-            //         println!("w{} test frontier: {:?} | took {:?}ms", index, f, timer.elapsed().as_millis());
-            //         timer = std::time::Instant::now();
-            // });
-
             // probe.with_frontier(|f| {
             //     let f = f.to_vec();
             //         println!("w{} frontier: {:?} | took {:?}ms", index, f, timer.elapsed().as_millis());
@@ -121,7 +76,7 @@ fn inspector(config: Config) {
             worker.step();
         };
 
-        println!("w{} done", index);
+        info!("w{} done", index);
         // stall application
         // use std::io::stdin;
         // stdin().read_line(&mut String::new()).unwrap();

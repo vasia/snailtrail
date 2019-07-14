@@ -11,9 +11,6 @@
 #[macro_use]
 extern crate abomonation_derive;
 
-#[macro_use]
-extern crate log;
-
 // Contains algorithms to be run on the PAG
 pub mod algo;
 

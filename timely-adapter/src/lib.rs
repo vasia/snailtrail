@@ -22,25 +22,13 @@ use timely::{
     dataflow::{
         channels::pact::Pipeline,
         operators::generic::operator::Operator,
-        operators::map::Map,
         Scope, Stream,
     },
     logging::{
-        StartStop, TimelyEvent,
+        StartStop,
         TimelyEvent::{Messages, Operates, Progress, Schedule},
     },
 };
-use timely::dataflow::operators::inspect::Inspect;
-use timely::dataflow::channels::pact;
-use timely::dataflow::operators::exchange::Exchange;
-use timely::logging::TimelyEvent::Text;
-
-use differential_dataflow::{
-    collection::{AsCollection, Collection},
-    operators::{consolidate::Consolidate, join::Join, reduce::Threshold},
-};
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::lattice::Lattice;
 
 /// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
 pub fn create_lrs<S, R>(
@@ -51,7 +39,6 @@ pub fn create_lrs<S, R>(
 ) -> Stream<S, LogRecord>
 where
     S: Scope<Timestamp = Pair<u64, Duration>>,
-    S::Timestamp: Lattice + Ord,
     R: Read + 'static,
 {
     replayers
@@ -60,7 +47,7 @@ where
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
-trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp: Lattice + Ord {
+trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Constructs a stream of log records to be used in PAG construction from an event stream.
     fn construct_lrs(&self, index: usize) -> Stream<S, LogRecord>;
     /// Strips an event `Stream` of encompassing operators
@@ -73,23 +60,21 @@ trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> where S::Timestamp
     fn build_lr(comp_event: CompEvent) -> Option<LogRecord>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
-    for Stream<S, CompEvent>
-    where S::Timestamp: Lattice + Ord
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, CompEvent>
 {
     fn construct_lrs(&self, index: usize) -> Stream<S, LogRecord> {
         self.peel_ops(index)
             .make_lrs(index)
     }
 
-    fn peel_ops(&self, index: usize) -> Stream<S, CompEvent> {
+    fn peel_ops(&self, _index: usize) -> Stream<S, CompEvent> {
         let mut vector = Vec::new();
         let mut outer_operates = std::collections::BTreeSet::new();
         let mut ids_to_addrs = std::collections::HashMap::new();
-        let mut total = 0;
+        // let mut total = 0;
 
         self.unary(Pipeline, "Peel", move |_, _| { move |input, output| {
-            let timer = std::time::Instant::now();
+            // let timer = std::time::Instant::now();
 
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
@@ -118,32 +103,32 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S>
                     }
                 }
 
-                if cap.time().first > 29996 {
-                    total += timer.elapsed().as_nanos();
+                // if cap.time().first > 29996 {
+                    // total += timer.elapsed().as_nanos();
                     // println!("w{} peel_ops time: {}ms", index, total / 1_000_000);
-                }
+                // }
             });
-            total += timer.elapsed().as_nanos();
+            // total += timer.elapsed().as_nanos();
         }})
     }
 
-    fn make_lrs(&self, index: usize) -> Stream<S, LogRecord> {
+    fn make_lrs(&self, _index: usize) -> Stream<S, LogRecord> {
         let mut vector = Vec::new();
-        let mut total = 0;
+        // let mut total = 0;
 
         self.unary(Pipeline, "LogRecordConstruct", move |_, _| { move |input, output| {
-            let timer = std::time::Instant::now();
+            // let timer = std::time::Instant::now();
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
                 output.session(&cap).give_iterator(vector.drain(..).flat_map(|x| Self::build_lr(x).into_iter()));
                 // @TODO: handle retractions (record.1.first += 1; record.2 = -1)
 
-                if cap.time().first > 29996 {
-                    total += timer.elapsed().as_nanos();
+                // if cap.time().first > 29996 {
+                    // total += timer.elapsed().as_nanos();
                     // println!("w{} make_lrs time: {}ms", index, total / 1_000_000);
-                }
+                // }
             });
-            total += timer.elapsed().as_nanos();
+            // total += timer.elapsed().as_nanos();
         }})
     }
 

@@ -4,17 +4,11 @@
 use std::collections::HashMap;
 use std::{io::Read, time::Duration};
 use std::cmp::Ordering;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
-use itertools::Itertools;
-
-use differential_dataflow::{collection::AsCollection, operators::join::Join, Collection};
-use differential_dataflow::lattice::Lattice;
+// use std::collections::hash_map::DefaultHasher;
+use std::hash::Hash;
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::Stream;
 use timely::dataflow::operators::filter::Filter;
 use timely::dataflow::operators::map::Map;
@@ -25,9 +19,6 @@ use timely::Data;
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use logformat::pair::Pair;
 use timely_adapter::{connect::Replayer, create_lrs};
-
-use differential_dataflow::operators::arrange::ArrangeByKey;
-use differential_dataflow::operators::join::JoinCore;
 
 use abomonation::Abomonation;
 
@@ -122,8 +113,6 @@ impl std::fmt::Debug for PagEdge {
     }
 }
 
-use timely::dataflow::operators::probe::Handle;
-
 // @TODO currently, this creates a new pag per epoch, but never removes the old one.
 //       so state will continually grow and multiple pags exist side by side.
 // @TODO: add an optional checking operator that tests individual logrecord timelines for sanity
@@ -139,31 +128,25 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read> 
     replayers: Vec<Replayer<S::Timestamp, R>>,
     index: usize,
     throttle: u64,
-    probe: &mut Handle<S::Timestamp>,
-) -> Stream<S, (PagEdge, S::Timestamp, isize)>
-where S::Timestamp: Lattice + Ord {
+) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
     create_lrs(scope, replayers, index, throttle)
-        .probe_with(probe)
         .construct_pag(index)
 }
 
 /// Dump PAG to file
-pub trait DumpPAG<S: Scope<Timestamp = Pair<u64, Duration>>>
-where S::Timestamp: Lattice + Ord {
+pub trait DumpPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Dump PAG to file
-    fn dump_pag(&self) -> Collection<S, PagEdge, isize>;
+    fn dump_pag(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> DumpPAG<S> for Collection<S, PagEdge, isize>
-where S::Timestamp: Lattice + Ord {
-    fn dump_pag(&self) -> Collection<S, PagEdge, isize> {
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> DumpPAG<S> for Stream<S, (PagEdge, S::Timestamp, isize)> {
+    fn dump_pag(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         self.inspect(|(x, _, _)| println!("[\"{:?}\" \"{:?}\"] \"{:?}\"", x.source, x.destination, x.edge_type))
     }
 }
 
 /// Operator that converts a Stream of LogRecords to a PAG
-pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>>
-where S::Timestamp: Lattice + Ord {
+pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Builds a PAG from `LogRecord` by concatenating local edges, control edges
     /// and data edges.
     fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
@@ -175,8 +158,7 @@ where S::Timestamp: Lattice + Ord {
     fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord>
-where S::Timestamp: Lattice + Ord {
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord> {
     fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         self.make_local_edges(index)
             .concat(&self.make_remote_edges(index))
@@ -258,11 +240,12 @@ where S::Timestamp: Lattice + Ord {
     fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         let narrowed = self.filter(|x| x.activity_type == ActivityType::ControlMessage || x.activity_type == ActivityType::DataMessage);
 
-        let sent = self
+        let sent = narrowed
             .filter(|x| x.event_type == EventType::Sent)
             .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
-        let received = self.filter(|x| x.event_type == EventType::Received)
+        let received = narrowed
+            .filter(|x| x.event_type == EventType::Received)
             .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
         sent.join_edges(index, &received)
@@ -276,13 +259,13 @@ where S::Timestamp: Lattice + Ord {
     }
 }
 
-trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where S::Timestamp: Lattice + Ord, D: Data + Hash + Eq + Abomonation + Send + Sync {
+trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where D: Data + Hash + Eq + Abomonation + Send + Sync {
     fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>, D> JoinEdges<S, D>
     for Stream<S, (D, LogRecord)>
-where S::Timestamp: Lattice + Ord, D: Data + Hash + Eq + Abomonation + Send + Sync
+where D: Data + Hash + Eq + Abomonation + Send + Sync
 {
     fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)> {
         // exchange by epoch doesn't make sense for low epoch_in_flight counts

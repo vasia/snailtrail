@@ -1,7 +1,7 @@
 [package]
 name = "timely-adapter"
 version = "0.2.0"
-authors = ["Malte Sandstede <samalt@ethz.ch"]
+authors = ["Malte Sandstede <samalt@ethz.ch>"]
 edition = "2018"
 
 [dependencies]

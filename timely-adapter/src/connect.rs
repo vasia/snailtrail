@@ -12,10 +12,9 @@
 use std::{
     error::Error,
     fs::File,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    io::Write,
+    net::TcpStream,
     path::Path,
-    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -33,7 +32,7 @@ use std::fmt::Debug;
 
 use abomonation::Abomonation;
 
-use TimelyEvent::{Channels, Messages, Operates, Progress, Schedule, Text};
+use TimelyEvent::{Messages, Operates, Progress, Schedule, Text};
 
 /// A prepared computation event: (epoch, seq_no, event)
 /// The seq_no is a worker-unique identifier of the message and given
@@ -119,7 +118,7 @@ impl NextEpoch for Duration {
 }
 
 impl NextEpoch for Pair<u64, Duration> {
-    fn tick_epoch(&mut self, tuple_time: &Duration) {
+    fn tick_epoch(&mut self, _tuple_time: &Duration) {
         self.first += 1;
     }
 
@@ -131,8 +130,6 @@ impl NextEpoch for Pair<u64, Duration> {
         self.first
     }
 }
-
-// const MAX_FUEL: usize = 512;
 
 // @TODO: for triangles query with round size == 1, the computation is slowed down by TCP.
 //        A reason for this might be the overhead in creating TCP packets, so it might be
@@ -213,7 +210,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
             match &x {
                 // Text events advance epochs, start and end logging
                 Text(e) => {
-                    info!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
+                    trace!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
                     info!("w{}@{:?}, overall: {}, pag: {}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages);
                     self.overall_messages = 0;
                     self.pag_messages = 0;
@@ -304,7 +301,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
 
     /// Flushes the buffer repeatedly, until all writers have received its content.
     fn flush_to_all(&mut self) {
-        info!("w{}: flush@{:?} to ALL - count: {}", self.worker_index, self.curr_cap, self.buffer.len());
+        trace!("w{}: flush@{:?} to ALL - count: {}", self.worker_index, self.curr_cap, self.buffer.len());
         for writer in self.writers.iter_mut() {
             writer.push(Event::Messages(self.curr_cap.clone(), self.buffer.clone()));
         }
@@ -316,7 +313,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
 
     /// Flushes the buffer. The buffer is written out at `curr_cap`.
     fn flush_buffer(&mut self) {
-        info!("w{} flush@{:?} to {} - count: {}", self.worker_index, self.curr_cap, self.curr_writer, self.buffer.len());
+        trace!("w{} flush@{:?} to {} - count: {}", self.worker_index, self.curr_cap, self.curr_writer, self.buffer.len());
         if self.buffer.len() > 0 {
             if let Some(writer) = self.writers.get_mut(self.curr_writer) {
                 writer.push(Event::Messages(self.curr_cap.clone(), std::mem::replace(&mut self.buffer, Vec::new())));
@@ -335,7 +332,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
         self.next_cap.tick_sys(t);
         self.tick_sys = false;
 
-        info!("w{} progresses from {:?} to {:?}", self.worker_index, self.curr_cap, self.next_cap);
+        trace!("w{} progresses from {:?} to {:?}", self.worker_index, self.curr_cap, self.next_cap);
 
         for writer in self.writers.iter_mut() {
             writer.push(Event::Progress(vec![
