@@ -30,6 +30,7 @@ fn main() {
     let _ = args.next(); // bin name
     let filename = args.next().expect("file name");
     let batch_size = args.next().expect("missing batch size").parse::<usize>().unwrap();
+    let rounds = args.next().expect("missing rounds").parse::<usize>().unwrap();
     let load_balance_factor = args.next().expect("missing lbf").parse::<usize>().unwrap();
     let max_fuel = args.next().expect("missing fuel").parse::<usize>().unwrap();
     let _ = args.next(); // --
@@ -126,27 +127,29 @@ fn main() {
         // how fast SnailTrail can process the generated log traces.
         // Similarly, a higher batch slows down the computation as well, as 1000 * batch_size
         // inputs are ingested by each worker.
-        for i in 0..(30000 * batch_size) {
+        for i in 0..rounds {
             // for w0 in 4w comp: 0, 5, 10, ...
             let curr_node = i * peers + index;
-            for &edge in graph.edges(curr_node) {
-                input.insert((curr_node, edge as usize));
+            for _ in 0 .. batch_size {
+                for &edge in graph.edges(curr_node) {
+                    input.insert((curr_node, edge as usize));
+                }
             }
 
-            if i % batch_size == 0 {
-                input.advance_to((i / batch_size) + 1);
-                input.flush();
-                while probe.less_than(input.time()) {
-                    worker.step();
-                }
+            input.advance_to(i + 1);
+            input.flush();
+            while probe.less_than(input.time()) {
+                worker.step();
+            }
 
+            if index == 0 {
                 info!("w{} {:?}\tEpoch {} complete, close times before: {:?}", index, timer.elapsed(), i, input.time());
-                if let Some(timely_logger) = &timely_logger {
-                    timely_logger.log(TimelyEvent::Text(format!(
-                        "[st] closed times before: {:?}",
-                        input.time()
-                    )));
-                }
+            }
+            if let Some(timely_logger) = &timely_logger {
+                timely_logger.log(TimelyEvent::Text(format!(
+                    "[st] closed times before: {:?}",
+                    input.time()
+                )));
             }
         }
     })
