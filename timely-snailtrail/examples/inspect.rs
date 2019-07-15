@@ -69,26 +69,21 @@ fn inspector(config: Config) {
             pag::create_pag(scope, readers, index, config.throttle)
                 .unary_frontier(Pipeline, "TheVoid", move |_cap, _info| {
                     let mut t0 = Instant::now();
-                    let mut last: Pair<u64, Duration> = Default::default();
                     let mut buffer = Vec::new();
 
-                    move |input, _output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
+                    move |input, output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
                         let mut count = 0;
                         let mut received_input = false;
 
-                        input.for_each(|_cap, data| {
+                        input.for_each(|cap, data| {
                             data.swap(&mut buffer);
-                            received_input = !buffer.is_empty();
                             count += buffer.len();
-                            buffer.clear();
+                            received_input = !buffer.is_empty();
+                            output.session(&cap).give_vec(&mut buffer);
                         });
 
-                        if input.frontier.is_empty() {
-                            println!("{}|{}|{}|{}", index, last.first, t0.elapsed().as_micros(), count);
-                        } else if received_input && !input.frontier.frontier().less_equal(&last) {
-                            println!("{}|{}|{}|{}", index, last.first, t0.elapsed().as_micros(), count);
-
-                            last = input.frontier.frontier()[0].clone();
+                        if received_input {
+                            println!("{}|{}|{}|{}", index, input.frontier.frontier()[0].first, t0.elapsed().as_micros(), count);
                             t0 = Instant::now();
                         }
                     }
