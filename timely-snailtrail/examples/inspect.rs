@@ -54,7 +54,7 @@ fn inspector(config: Config) {
 
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {
         let index = worker.index();
-        if index == 0 {println!("{:?}", &config);}
+        if index == 0 {info!("{:?}", &config);}
 
         // read replayers from file (offline) or TCP stream (online)
         let readers: Vec<EventReader<_, timely_adapter::connect::CompEvent, _>> =

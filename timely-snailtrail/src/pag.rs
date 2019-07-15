@@ -141,7 +141,7 @@ pub trait DumpPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> DumpPAG<S> for Stream<S, (PagEdge, S::Timestamp, isize)> {
     fn dump_pag(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        self.inspect(|(x, _, _)| println!("[\"{:?}\" \"{:?}\"] \"{:?}\"", x.source, x.destination, x.edge_type))
+        self.inspect(|(x, _, _)| info!("[\"{:?}\" \"{:?}\"] \"{:?}\"", x.source, x.destination, x.edge_type))
     }
 }
 
@@ -199,7 +199,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
             total += timer.elapsed().as_nanos();
             if input.frontier().is_empty() {
-                println!("w{} local edges time: {}ms", index, total / 1_000_000);
+                info!("w{} local edges time: {}ms", index, total / 1_000_000);
             }
         }})
     }
@@ -311,7 +311,7 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync
 
                     if cap.time().first > 29998 {
                         total += timer.elapsed().as_nanos();
-                        println!("w{} edges join time: {}ms (map1: {}, map2: {})", index, total / 1_000_000, map1.len(), map2.len());
+                        info!("w{} edges join time: {}ms (map1: {}, map2: {})", index, total / 1_000_000, map1.len(), map2.len());
                     }
                 });
 
