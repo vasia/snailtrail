@@ -2,14 +2,19 @@
 extern crate log;
 
 use timely_snailtrail::{pag, Config};
+use timely_snailtrail::pag::PagEdge;
 
 use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::operators::capture::EventReader;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputHandle;
+use timely::dataflow::operators::generic::operator::Operator;
 
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use logformat::pair::Pair;
 
@@ -62,6 +67,32 @@ fn inspector(config: Config) {
 
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
             pag::create_pag(scope, readers, index, config.throttle)
+                .unary_frontier(Pipeline, "TheVoid", move |_cap, _info| {
+                    let mut t0 = Instant::now();
+                    let mut last: Pair<u64, Duration> = Default::default();
+                    let mut buffer = Vec::new();
+
+                    move |input, _output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
+                        let mut count = 0;
+                        let mut received_input = false;
+
+                        input.for_each(|_cap, data| {
+                            data.swap(&mut buffer);
+                            received_input = !buffer.is_empty();
+                            count += buffer.len();
+                            buffer.clear();
+                        });
+
+                        if input.frontier.is_empty() {
+                            println!("{}|{}|{}|{}", index, last.first, t0.elapsed().as_micros(), count);
+                        } else if received_input && !input.frontier.frontier().less_equal(&last) {
+                            println!("{}|{}|{}|{}", index, last.first, t0.elapsed().as_micros(), count);
+
+                            last = input.frontier.frontier()[0].clone();
+                            t0 = Instant::now();
+                        }
+                    }
+                })
                 .probe()
         });
 
@@ -87,42 +118,3 @@ fn inspector(config: Config) {
 
         //         // .filter(|x| x.source.epoch > x.destination.epoch)
         //         // .inspect(move |(x, t, diff)| println!("w{} | {} -> {}: -> w{}\t {:?}", x.source.worker_id, x.source.seq_no, x.destination.seq_no, x.destination.worker_id, x.edge_type))
-
-
-
-        // use std::fs::File;
-        // use std::io::Write;
-        // let mut file = File::create(format!("out_{}_{}_{}.csv", index, config.worker_peers, config.source_peers)).expect("couldn't create file");
-
-        //         // .inner
-        //         // .unary_frontier(timely::dataflow::channels::pact::Exchange::new(|_x| 0), "TheVoid", move |_cap, _info| {
-        //         //     let mut t0 = Instant::now();
-        //         //     let mut last: Pair<u64, Duration> = Default::default();
-        //         //     let mut buffer = Vec::new();
-        //         //     let mut count = 0;
-
-        //         //     move |input, output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
-        //         //         let mut received_input = false;
-        //         //         input.for_each(|cap, data| {
-        //         //             data.swap(&mut buffer);
-        //         //             received_input = !buffer.is_empty();
-        //         //             count += buffer.len();
-        //         //             // for x in buffer.drain(..) {
-        //         //             //     count += x.2; // subtract retractions
-        //         //             // }
-        //         //             buffer.clear();
-        //         //         });
-
-        //         //         if input.frontier.is_empty() {
-        //         //             println!("[{:?}] inputs to void sink ceased", t0.elapsed());
-        //         //             println!("{:?}", count);
-        //         //             // writeln!(file, "{},{},{},{}", t0.elapsed().as_millis(), count, last.first, last.second.as_millis()).expect("write failed");
-        //         //         } else if received_input && !input.frontier.frontier().less_equal(&last) {
-        //         //             // writeln!(file, "{},{},{},{}", t0.elapsed().as_millis(), count, last.first, last.second.as_millis()).expect("write failed");
-
-        //         //             last = input.frontier.frontier()[0].clone();
-        //         //             // println!("{:?}", last);
-        //         //             t0 = Instant::now();
-        //         //         }
-        //         //     }
-        //         // })
