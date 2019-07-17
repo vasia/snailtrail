@@ -13,8 +13,8 @@ set style line 9 lc rgb "#ff0000" lt 1 lw 1 pt 2 ps 1
 # set logscale x 10
 # set format x "10^{%L}"
 
-# set logscale y 10
-# set format y "10^{%L}"
+set logscale y 10
+set format y "10^{%L}"
 
 set key inside left top Left reverse
 
@@ -40,12 +40,13 @@ STATS_mean notitle ls 9
 # "tmp/prepped.csv" using 1:($2 / 1000) smooth cumulative with lines ls 4 title "cumulative"
 
 
-stats "tmp/prepped.csv" using ($3 / ($2 / 1000)) 
+stats "tmp/prepped.csv" using 3 name "EVS"
+stats "tmp/prepped.csv" using ($2 / 1000) name "DUR"
 set title sprintf("%s throughput", my_title)
 set xlabel "epoch"
 set ylabel sprintf("%s / s", my_event)
 plot "tmp/prepped.csv" using 1:($3 / ($2 / 1000)) with lines notitle, \
-STATS_mean notitle ls 9
+(EVS_mean / DUR_mean) notitle ls 9
 
 
 set title sprintf("%s scaling", my_title)

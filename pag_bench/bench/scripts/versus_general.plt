@@ -44,15 +44,17 @@ TC_mean notitle ls 9, \
 ST_mean notitle ls 9
 
 
-stats "tmp/TC_prepped.csv" using ($3 / ($2 / 1000)) name "TC"
-stats "tmp/ST_prepped.csv" using ($3 / ($2 / 1000)) name "ST"
+stats "tmp/TC_prepped.csv" using 3 name "TC_EVS"
+stats "tmp/TC_prepped.csv" using ($2 / 1000) name "TC_DUR"
+stats "tmp/ST_prepped.csv" using 3 name "ST_EVS"
+stats "tmp/ST_prepped.csv" using ($2 / 1000) name "ST_DUR"
 set title "throughput"
 set xlabel "epoch"
 set ylabel "[events/edges] / s"
 plot "tmp/TC_prepped.csv" using 1:($3 / ($2 / 1000)) with lines title "TC", \
-TC_mean notitle ls 9, \
+TC_EVS_mean / TC_DUR_mean notitle ls 9, \
 "tmp/ST_prepped.csv" using 1:($3 / ($2 / 1000)) with lines title "ST", \
-ST_mean notitle ls 9
+ST_EVS_mean / ST_DUR_mean notitle ls 9
 
 
 set title "scaling"

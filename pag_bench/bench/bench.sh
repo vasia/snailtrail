@@ -1,8 +1,8 @@
 #!/bin/sh
-# CLA: input file, title, [pag edges / events]
+# CLA: input file, title, [pag edges / events], workers
 
 # general plots
-awk -F '|' -f scripts/prep.awk $1 | sort -n > tmp/prepped.csv
+awk -F '|' -f scripts/prep.awk -v workers=$4 $1 | awk -F " " '$2 != 0' | sort -n > tmp/prepped.csv
 
 # cdfs
 xsv select 2 tmp/prepped.csv -d " " | sort -n | uniq -c | awk 'BEGIN{sum=0}{print $2,$1,sum; sum=sum+$1}' > tmp/latency_cdf.csv
