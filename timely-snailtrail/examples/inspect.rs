@@ -27,16 +27,16 @@ fn main() {
     let worker_peers = std::env::args().nth(1).unwrap().parse::<usize>().unwrap();
     let source_peers = std::env::args().nth(2).unwrap().parse::<usize>().unwrap();
     let throttle = std::env::args().nth(3).unwrap().parse::<u64>().unwrap();
-    let from_file = if let Some(_) = std::env::args().nth(4) {
-        true
+    let online = if let Some(ip) = std::env::args().nth(4) {
+        Some((ip.parse::<String>().unwrap(), std::env::args().nth(5).unwrap().parse::<u16>().unwrap()))
     } else {
-        false
+        None
     };
     let config = Config {
         timely_args: vec!["-w".to_string(), worker_peers.to_string()],
         worker_peers,
         source_peers,
-        from_file,
+        online,
         throttle,
     };
 
@@ -45,16 +45,16 @@ fn main() {
 
 fn inspector(config: Config) {
     // creates one socket per worker in the computation we're examining
-    let replay_source = if config.from_file {
+    let replay_source = if let Some((ip, port)) = &config.online {
+        let sockets = connect::open_sockets(ip.parse().expect("couldn't parse IP"), *port, config.source_peers).expect("couldn't open sockets");
+        ReplaySource::Tcp(Arc::new(Mutex::new(sockets)))
+    } else {
         let files = (0 .. config.source_peers)
             .map(|idx| format!("{}.dump", idx))
             .map(|path| Some(PathBuf::from(path)))
             .collect::<Vec<_>>();
 
         ReplaySource::Files(Arc::new(Mutex::new(files)))
-    } else {
-        let sockets = connect::open_sockets("127.0.0.1".parse().expect("couldn't parse IP"), 8000, config.source_peers).expect("couldn't open sockets");
-        ReplaySource::Tcp(Arc::new(Mutex::new(sockets)))
     };
 
     timely::execute_from_args(config.timely_args.clone().into_iter(), move |worker| {

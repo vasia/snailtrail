@@ -28,7 +28,7 @@ pub struct Config {
     /// # of workers the profiled computation runs on
     pub source_peers: usize,
     /// whether SnailTrail should read from file or TCP
-    pub from_file: bool,
+    pub online: Option<(String, u16)>,
     /// # of SnailTrail workers
     pub worker_peers: usize,
     /// max epochs in flight
