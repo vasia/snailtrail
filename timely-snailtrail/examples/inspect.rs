@@ -68,22 +68,19 @@ fn inspector(config: Config) {
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
             pag::create_pag(scope, readers, index, config.throttle)
                 .unary_frontier(Pipeline, "TheVoid", move |_cap, _info| {
-                    let mut t0 = Instant::now();
                     let mut buffer = Vec::new();
+                    let mut t0 = Instant::now();
 
                     move |input, output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
                         let mut count = 0;
-                        let mut received_input = false;
-
                         input.for_each(|cap, data| {
                             data.swap(&mut buffer);
                             count += buffer.len();
-                            received_input = !buffer.is_empty();
                             output.session(&cap).give_vec(&mut buffer);
                         });
 
-                        if received_input {
-                            println!("{}|{}|{}|{}", index, input.frontier.frontier()[0].first, t0.elapsed().as_micros(), count);
+                        if let Some(f) = input.frontier.frontier().get(0) {
+                            println!("{}|{}|{}|{}", index, f.first, t0.elapsed().as_nanos(), count);
                             t0 = Instant::now();
                         }
                     }
