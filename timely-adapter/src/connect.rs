@@ -52,6 +52,7 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
     assert!(load_balance_factor > 0);
 
     if let Ok(addr) = ::std::env::var("SNAILTRAIL_ADDR") {
+        info!("w{} registers logger @{:?}: lbf{}, fuel{}", worker.index(), &addr, load_balance_factor, max_fuel);
         let writers = (0 .. load_balance_factor)
             .map(|_| TcpStream::connect(&addr).expect("could not connect to logging stream"))
             .map(|stream| {
@@ -65,6 +66,8 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
                 EventWriter::<T, _, _>::new(stream)
             })
             .collect::<Vec<_>>();
+
+        info!("w{} registered {} streams", worker.index(), writers.len());
 
         let mut pag_logger = PAGLogger::new(worker.index(), writers, max_fuel);
         worker
