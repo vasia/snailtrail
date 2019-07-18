@@ -36,7 +36,7 @@ fn main() {
     let rounds = args.next().expect("missing rounds").parse::<usize>().unwrap();
     let load_balance_factor = args.next().expect("missing lbf").parse::<usize>().unwrap();
     let max_fuel = args.next().expect("missing fuel").parse::<usize>().unwrap();
-    let tuples_file = args.next().expect("missing tuples file").parse::<usize>().unwrap();
+    let tuples_file = args.next().expect("missing tuples file").parse::<String>().unwrap();
     let _ = args.next(); // --
 
     let args = args.collect::<Vec<_>>();
