@@ -19,6 +19,9 @@ use dogsdogsdogs::{altneu::AltNeu, CollectionIndex};
 use std::time::Duration;
 use logformat::pair::Pair;
 
+use std::fs::File;
+use std::io::Write;
+
 fn main() {
     env_logger::init();
 
@@ -33,12 +36,15 @@ fn main() {
     let rounds = args.next().expect("missing rounds").parse::<usize>().unwrap();
     let load_balance_factor = args.next().expect("missing lbf").parse::<usize>().unwrap();
     let max_fuel = args.next().expect("missing fuel").parse::<usize>().unwrap();
+    let tuples_file = args.next().expect("missing tuples file").parse::<usize>().unwrap();
     let _ = args.next(); // --
 
     let args = args.collect::<Vec<_>>();
     timely::execute_from_args(args.clone().into_iter(), move |worker| {
         info!("triangles with args: {:?}, w{}, lbf {}", args, worker.peers(), load_balance_factor);
         register_logger::<Pair<u64, Duration>>(worker, load_balance_factor, max_fuel);
+
+        let mut file = File::create(format!("{}_{}.csv", tuples_file, worker.index())).expect("couldn't create file");
 
         let mut timer = std::time::Instant::now();
         let graph = GraphMMap::new(&filename);
@@ -121,6 +127,7 @@ fn main() {
 
         let peers = worker.peers();
         let index = worker.index();
+        let mut count = 0;
 
         // Note: parallelization makes this computation more complex (as `n` times the
         // input is inserted). We're not interested in speeding up triangles, but measuring
@@ -133,8 +140,12 @@ fn main() {
             for _ in 0 .. batch_size {
                 for &edge in graph.edges(curr_node) {
                     input.insert((curr_node, edge as usize));
+                    count += 1;
                 }
             }
+
+            writeln!(file, "{}|{}|{}", index, i, count).expect("write failed");
+            count = 0;
 
             input.advance_to(i + 1);
             input.flush();
