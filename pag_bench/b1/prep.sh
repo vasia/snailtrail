@@ -1,3 +1,5 @@
+#!/usr/local/bin/bash
+
 cd raw
 
 # tuples
@@ -32,5 +34,34 @@ do
     xsv join -n -d ' ' 3 tmp_lat_${j}_${i}.csv 3 tmp_tp_${j}_${i}.csv | xsv fmt -t ' ' > ../prepped/prepped_lat_vs_tp_${j}_${i}.csv;
     rm tmp_lat_${j}_${i}.csv;
     rm tmp_tp_${j}_${i}.csv;
+  done
+done
+  
+  
+# requires bash 4+ to work
+declare -A sizes;
+sizes=( [5]=100000 [50]=250000 [200]=500000 [500]=1000000)
+
+# scaling lat
+for j in 1 2 4 8 16 32
+do
+  rm -rf ../prepped/prepped_scaling_lat_${j}.csv || true
+  touch ../prepped/prepped_scaling_lat_${j}.csv
+  for i in 5 50 200 500
+  do
+    printf "${sizes[${i}]} " >> ../prepped/prepped_scaling_lat_${j}.csv;
+    xsv select 2 ../prepped/prepped_st_${j}_${i}.csv -d ' ' | awk '{sum+=$1}END{print sum/NR}' >> ../prepped/prepped_scaling_lat_${j}.csv;
+  done
+done
+
+# scaling tp 
+for j in 1 2 4 8 16 32
+do
+  rm -rf ../prepped/prepped_scaling_tp_${j}.csv || true
+  touch ../prepped/prepped_scaling_tp_${j}.csv
+  for i in 5 50 200 500
+  do
+    printf "${sizes[${i}]} " >> ../prepped/prepped_scaling_tp_${j}.csv;
+    xsv select 1,4 ../prepped/prepped_lat_vs_tp_${j}_${i}.csv -d ' ' | awk -F ',' '{a+=$2; b+=$1}END{printf "%.0f\n", (a/b)}' >> ../prepped/prepped_scaling_tp_${j}.csv;
   done
 done
