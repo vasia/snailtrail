@@ -12,7 +12,7 @@ set style line 9 lc rgb "#F88967" lt 1 lw 1 pt 2 ps 1
 set style line 10 lc rgb "#F88967" lt 1 lw 1 pt 2 ps 1 dashtype "_"
 set style line 11 lc rgb "#BC3409" lt 1 lw 1 pt 2 ps 1
 set style line 12 lc rgb "#BC3409" lt 1 lw 1 pt 2 ps 1 dashtype "_"
-set style line 13 lc rgb "#BC08A7" lt 1 lw 2 pt 2 ps 1
+set style line 13 lc rgb "#BC08A7" lt 1 lw 1 pt 2 ps 1 dashtype "."
 
 set logscale y 10
 set format y "10^{%L}"
