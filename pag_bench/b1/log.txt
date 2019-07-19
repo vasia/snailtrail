@@ -1,0 +1,33 @@
+triangles w32, 5, 0m25.806s, 16G
+inspect w1, 5, 2m57.924s
+inspect w2, 5, 1m47.849s
+inspect w4, 5, 1m2.350s
+inspect w8, 5, 0m33.781s
+inspect w16, 5, 0m19.485s
+inspect w32, 5, 0m15.704s
+
+triangles w32, 50, 1m3.785s, 29G
+inspect w1, 50, 4m35.021s
+inspect w2, 50, 3m20.881s
+inspect w4, 50, 1m38.151s
+inspect w8, 50, 0m52.043s
+inspect w16, 50, 0m31.382s
+inspect w32, 50, 0m21.187s
+
+triangles w32, 200, 3m13.686s, 62G
+inspect w1, 200, 8m26.677s
+inspect w2, 200, 5m15.472s
+inspect w4, 200, 3m15.675s
+inspect w8, 200, 1m42.768s
+inspect w16, 200, 1m0.335s
+inspect w32, 200, 0m42.045s
+
+triangles w32, 500, 8m6.390s, 123G
+inspect w1, 500, 15m49.679s
+inspect w2, 500, 9m43.800s
+inspect w4, 500, 5m56.277s
+inspect w8, 500, 3m26.750s
+inspect w16, 500, 1m55.786s
+inspect w32, 500, 1m24.473s
+
+
