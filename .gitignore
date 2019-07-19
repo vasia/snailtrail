@@ -4,6 +4,8 @@
 *.dump
 
 plots/
+prepped/
+tmp/
 
 # Nothing yet
 
