@@ -1,10 +1,9 @@
 # Experiments
 
-`triangles livejournal.graph $i 1000 1 4096 -- -w32`
-
 ## influence of triangles batch size (`$i`) on events / epoch  
 
-all on fdr1
+- tri32
+- `triangles livejournal.graph $i 1000 1 4096 -- -w32`
 
 | workers | `$i` | events / epoch | time [s] | dump size [G] |
 |---|---|---|---|---|
@@ -26,3 +25,15 @@ all on fdr1
 | 32 | 300 | 700000 | 286 | 83 | 
 | 32 | 400 | 900000 | 384 | 103 | 
 | 32 | 500 | 1000000 | 490 | 122 | 
+
+## Offline, timely PAG
+
+- b1
+- fdr1
+- dump to in-mem partition
+
+- b2
+- sgs-r820-01 (same as original SnailTrail)
+- **Results are very much comparable with fdr1!**
+- -> Comparing fdr1 results with original SnailTrail is possible
+
