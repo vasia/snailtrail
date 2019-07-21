@@ -1,4 +1,34 @@
-# Experiments
+201907061658 SnailTrail Benchmarking
+#thesis #benchmark
+
+# PAG Join Comparison
+
+## Stats
+
+- triangles 30K, 2w, 2lbf (134s)
+- macbook
+- 41945340 events
+- 750136 control edges
+- 40178576 all edges (cross-epoch edges included)
+- 40173232 all edges (no cross-epoch edges)
+
+## pag construction (differential joins)
+
+- 1 4 1: 47.8s
+- 2 4 1: 27.5s
+- 4 4 1: 32.3s
+
+## pag construction (timely combined join)
+
+- 1 4 1: 31.1s
+- 2 4 1: 18s  
+- 4 4 1: 21.2s
+
+- 1 4 10: 39.7s
+- 2 4 10: 26s
+- 4 4 10: 24s
+
+# Cluster Experiments
 
 ## influence of triangles batch size (`$i`) on events / epoch  
 
@@ -34,6 +64,5 @@
 
 - b2
 - sgs-r820-01 (same as original SnailTrail)
-- **Results are very much comparable with fdr1!**
-- -> Comparing fdr1 results with original SnailTrail is possible
+- **Results are very much comparable with fdr1!**: Comparing fdr1 results with original SnailTrail is possible
 

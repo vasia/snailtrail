@@ -22,7 +22,7 @@ set logscale x 10
 set format x "10^{%L}"
 # set xrange [10000:1000000000]
 
-# set samples 20000 
+set samples 20000 
 
 set output "plots/st_scaling.pdf"
 
