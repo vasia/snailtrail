@@ -223,7 +223,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
                     trace!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
                     // info!("w{}@{:?}, overall: {}, pag: {}, elapsed: {:?}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages, self.elapsed.elapsed());
                     if self.curr_cap.get_epoch() > 0 {
-                        println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.get_epoch() - 1, self.elapsed.elapsed().as_micros(), self.overall_messages, self.pag_messages);
+                        println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.get_epoch() - 1, self.elapsed.elapsed().as_nanos(), self.overall_messages, self.pag_messages);
                     }
                     self.elapsed = std::time::Instant::now();
                     self.overall_messages = 0;
