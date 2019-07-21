@@ -10,6 +10,7 @@ use timely::dataflow::operators::capture::EventReader;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::generic::operator::Operator;
+use timely::dataflow::channels::pact::Exchange;
 
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
@@ -80,9 +81,27 @@ fn inspector(config: Config) {
                         });
 
                         if let Some(f) = input.frontier.frontier().get(0) {
-                            println!("{}|{}|{}|{}", index, f.first, t0.elapsed().as_nanos(), count);
+                            // println!("{}|{}|{}|{}", index, f.first, t0.elapsed().as_nanos(), count);
                             t0 = Instant::now();
                         }
+                    }
+                })
+                .unary_frontier(Exchange::new(|_| 0), "Edges", move |_cap, _info| {
+                    let mut buffer = Vec::new();
+                    let mut t0 = Instant::now();
+
+                    if index == 0 {
+                        println!("from_epoch,from_timestamp,from_workerid,from_seqno,to_epoch,to_timestamp,to_workerid,to_seqno,edge_type,edge_operatorid");
+                    }
+
+                    move |input, output: &mut OutputHandle<_, (PagEdge, Pair<u64, Duration>, isize), _>| {
+                        input.for_each(|cap, data| {
+                            data.swap(&mut buffer);
+                            for (edge, _, _) in buffer.iter() {
+                                println!("{:?}", edge);
+                            }
+                            output.session(&cap).give_vec(&mut buffer);
+                        });
                     }
                 })
                 .probe()

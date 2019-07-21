@@ -60,7 +60,8 @@ impl<'a> From<&'a LogRecord> for PagNode {
 
 impl std::fmt::Debug for PagNode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}|{:?}@w{} (s{})", self.epoch, self.timestamp, self.worker_id, self.seq_no)
+        // write!(f, "{}|{:?}@w{} (s{})", self.epoch, self.timestamp, self.worker_id, self.seq_no)
+        write!(f, "{},{},{},{}", self.epoch, self.timestamp.as_nanos(), self.worker_id, self.seq_no)
     }
 }
 
@@ -106,10 +107,14 @@ impl PartialOrd for PagEdge {
 
 impl std::fmt::Debug for PagEdge {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?} -> {:?} | {:?} {:?}\t| oid: {:?}\t",
+        // write!(f, "{:?} -> {:?} | {:?} {:?}\t| oid: {:?}\t",
+        //        self.source, self.destination,
+        //        self.traverse, self.edge_type,
+        //        self.operator_id)
+
+        write!(f, "{:?},{:?},{:?},{:?}",
                self.source, self.destination,
-               self.traverse, self.edge_type,
-               self.operator_id)
+               self.edge_type, self.operator_id)
     }
 }
 
