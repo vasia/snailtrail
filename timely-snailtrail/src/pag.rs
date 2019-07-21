@@ -141,12 +141,16 @@ pub fn create_pag<S: Scope<Timestamp = Pair<u64, Duration>>, R: 'static + Read> 
 /// Dump PAG to file
 pub trait DumpPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Dump PAG to file
-    fn dump_pag(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
+    fn dump_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> DumpPAG<S> for Stream<S, (PagEdge, S::Timestamp, isize)> {
-    fn dump_pag(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        self.inspect(|(x, _, _)| info!("[\"{:?}\" \"{:?}\"] \"{:?}\"", x.source, x.destination, x.edge_type))
+    fn dump_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
+        if index == 0 {
+            println!("from_epoch,from_timestamp,from_workerid,from_seqno,to_epoch,to_timestamp,to_workerid,to_seqno,edge_type,edge_operatorid");
+        }
+
+        self.inspect(|(x, _, _)| println!("{:?}", x))
     }
 }
 
