@@ -186,6 +186,8 @@ struct PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + De
     pag_messages: u64,
     /// For debugging (elapsed time)
     elapsed: std::time::Instant,
+    /// For prepping
+    epoch_count: u64,
 }
 
 impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug + Default + Clone + Abomonation, W: 'static + Write {
@@ -209,6 +211,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
             overall_messages: 0,
             pag_messages: 0,
             elapsed: std::time::Instant::now(),
+            epoch_count: 0,
         }
     }
 
@@ -222,22 +225,29 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
                 Text(e) => {
                     trace!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
                     // info!("w{}@{:?}, overall: {}, pag: {}, elapsed: {:?}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages, self.elapsed.elapsed());
-                    if self.curr_cap.get_epoch() > 0 {
-                        println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.get_epoch() - 1, self.elapsed.elapsed().as_nanos(), self.overall_messages, self.pag_messages);
-                    }
-                    self.elapsed = std::time::Instant::now();
-                    self.overall_messages = 0;
-                    self.pag_messages = 0;
 
-                    self.next_cap.tick_epoch(&t);
+                    if self.epoch_count % 10 == 0 {
+                        if self.curr_cap.get_epoch() > 0 {
+                            println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.get_epoch() - 1, self.elapsed.elapsed().as_nanos(), self.overall_messages, self.pag_messages);
+                        }
+                        self.elapsed = std::time::Instant::now();
+                        self.overall_messages = 0;
+                        self.pag_messages = 0;
+
+                        self.next_cap.tick_epoch(&t);
+                    }
 
                     if self.curr_cap == Default::default() {
                         // The dataflow structure is propagated to all writers.
                         self.flush_to_all();
                     } else {
-                        self.flush_buffer();
-                        self.curr_writer = (self.curr_writer + 1) % self.writers.len();
+                        if self.epoch_count % 10 == 0 {
+                            self.flush_buffer();
+                            self.curr_writer = (self.curr_writer + 1) % self.writers.len();
+                        }
                     }
+
+                    self.epoch_count += 1;
                 }
                 Operates(_) => {
                     self.pag_messages += 1;
