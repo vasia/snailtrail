@@ -307,7 +307,10 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync
                     for (key, val1) in vector1.drain(..) {
                         if let Some(values) = map2.get(&key) {
                             for val2 in values.iter() {
-                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                                // assert!(val1.epoch == val2.epoch);
+                                if val1.epoch == val2.epoch {
+                                    session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                                }
                             }
                         }
 
@@ -326,7 +329,10 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync
                     for (key, val2) in vector2.drain(..) {
                         if let Some(values) = map1.get(&key) {
                             for val1 in values.iter() {
-                                session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                                // assert!(val1.epoch == val2.epoch);
+                                if val1.epoch == val2.epoch {
+                                    session.give((val1.clone(), val2.clone(), cap.time().clone()));
+                                }
                             }
                         }
 
