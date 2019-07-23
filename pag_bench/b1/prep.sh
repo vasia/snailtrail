@@ -62,6 +62,7 @@ do
   for i in 5 50 200 500 5000 50000
   do
     printf "${sizes[${i}]} " >> ../prepped/prepped_scaling_tp_${j}.csv;
-    xsv select 4 ../prepped/prepped_lat_vs_tp_${j}_${i}.csv -d ' ' | awk -F ',' '{a+=$1}END{print a/NR}' >> ../prepped/prepped_scaling_tp_${j}.csv;
+    awk -F ' ' '{sum += $2}END{printf "%.0f ", sum}' ../prepped/prepped_st_${j}_${i}.csv >> ../prepped/prepped_scaling_tp_${j}.csv;
+    awk -F ' ' '{sum += $3}END{printf "%.0f\n", sum}' ../prepped/prepped_tc_32_${i}.csv >> ../prepped/prepped_scaling_tp_${j}.csv;
   done
 done

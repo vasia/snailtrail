@@ -58,11 +58,15 @@
 
 ## Offline, timely PAG
 
-- b1
+### b1
 - fdr1
 - dump to in-mem partition
 
-- b2
+### b2
 - sgs-r820-01 (same as original SnailTrail)
 - **Results are very much comparable with fdr1!**: Comparing fdr1 results with original SnailTrail is possible
 
+### b3
+- fdr1
+- dump to in-mem partition
+- timely LRS, differential PAG
