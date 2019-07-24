@@ -173,73 +173,45 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
             .concat(&self.make_remote_edges(index))
     }
 
-    // this should scale with epoch size, as it can update incrementally
-    // however, it takes longer than simple timely computations
     fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::ArrangeByKey;
-        use differential_dataflow::operators::join::JoinCore;
+        // A differential join looks nicer and doesn't depend on order, but is
+        // ~7x slower. Getting its semantics right is also tricky, since some `seq_no`s
+        // are cut up due to `peel_ops`.
 
-        let edge_start = self
-            .map(|x| {
-                let ts = Pair::new(x.epoch, x.timestamp);
-                (((x.local_worker, x.epoch, x.seq_no), x), ts, 1 as isize)
-            })
-            .as_collection()
-            .arrange_by_key();
+        let mut vector = Vec::new();
+        let mut buffer: HashMap<usize, LogRecord> = HashMap::new();
+        let mut total = 0;
 
-        let edge_end = self
-            .map(|x| {
-                let ts = Pair::new(x.epoch, x.timestamp);
-                (((x.local_worker, x.epoch, x.seq_no + 1), x), ts, 1 as isize)
-            })
-            .as_collection()
-            .arrange_by_key();
+        self.unary_frontier(Pipeline, "Local Edges", move |_, _| { move |input, output| {
+            let timer = std::time::Instant::now();
 
-        edge_start
-            .join_core(&edge_end, |_key, curr, prev| Some(Self::build_local_edge(&prev, &curr)))
-            .inner
+            input.for_each(|cap, data| {
+                data.swap(&mut vector);
+                for lr in vector.drain(..) {
+                    let local_worker = lr.local_worker as usize;
+
+                    if let Some(prev_lr) = buffer.get(&local_worker) {
+                        // we've seen a lr from this local_worker before
+
+                        assert!(prev_lr.epoch == lr.epoch || lr.epoch > prev_lr.epoch,
+                                format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
+
+                        if prev_lr.epoch == lr.epoch {
+                            // only join lrs within an epoch
+                            output.session(&cap).give((Self::build_local_edge(&prev_lr, &lr), cap.time().clone(), 1));
+                        }
+                    }
+
+                    buffer.insert(local_worker, lr);
+                }
+            });
+
+            total += timer.elapsed().as_nanos();
+            if input.frontier().is_empty() {
+                info!("w{} local edges time: {}ms", index, total / 1_000_000);
+            }
+        }})
     }
-
-    // fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-    //     // A differential join looks nicer and doesn't depend on order, but is
-    //     // ~7x slower. Getting its semantics right is also tricky, since some `seq_no`s
-    //     // are cut up due to `peel_ops`.
-
-    //     let mut vector = Vec::new();
-    //     let mut buffer: HashMap<usize, LogRecord> = HashMap::new();
-    //     let mut total = 0;
-
-    //     self.unary_frontier(Pipeline, "Local Edges", move |_, _| { move |input, output| {
-    //         let timer = std::time::Instant::now();
-
-    //         input.for_each(|cap, data| {
-    //             data.swap(&mut vector);
-    //             for lr in vector.drain(..) {
-    //                 let local_worker = lr.local_worker as usize;
-
-    //                 if let Some(prev_lr) = buffer.get(&local_worker) {
-    //                     // we've seen a lr from this local_worker before
-
-    //                     assert!(prev_lr.epoch == lr.epoch || lr.epoch > prev_lr.epoch,
-    //                             format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
-
-    //                     if prev_lr.epoch == lr.epoch {
-    //                         // only join lrs within an epoch
-    //                         output.session(&cap).give((Self::build_local_edge(&prev_lr, &lr), cap.time().clone(), 1));
-    //                     }
-    //                 }
-
-    //                 buffer.insert(local_worker, lr);
-    //             }
-    //         });
-
-    //         total += timer.elapsed().as_nanos();
-    //         if input.frontier().is_empty() {
-    //             info!("w{} local edges time: {}ms", index, total / 1_000_000);
-    //         }
-    //     }})
-    // }
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
         let edge_type = match (prev.event_type, record.event_type) {
@@ -275,60 +247,25 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
     }
 
     fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        use differential_dataflow::collection::AsCollection;
-        use differential_dataflow::operators::arrange::ArrangeByKey;
-        use differential_dataflow::operators::join::JoinCore;
-
         let narrowed = self.filter(|x| x.activity_type == ActivityType::ControlMessage || x.activity_type == ActivityType::DataMessage);
 
         let sent = narrowed
             .filter(|x| x.event_type == EventType::Sent)
-            .map(|x| {
-                let ts = Pair::new(x.epoch, x.timestamp);
-                (((x.local_worker, x.correlator_id, x.channel_id), x), ts, 1 as isize)
-            })
-            .as_collection()
-            .arrange_by_key();
+            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
 
         let received = narrowed
             .filter(|x| x.event_type == EventType::Received)
-            .map(|x| {
-                let ts = Pair::new(x.epoch, x.timestamp);
-                (((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x), ts, 1 as isize)
-            })
-            .as_collection()
-            .arrange_by_key();
+            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
 
-        sent.join_core(&received, |_key, from, to| Some(PagEdge {
-            source: PagNode::from(from),
-            destination: PagNode::from(to),
-            edge_type: ActivityType::ControlMessage,
-            operator_id: None,
-            traverse: TraversalType::Unbounded,
-        }))
-            .inner
+        sent.join_edges(index, &received)
+            .map(|(from, to, t)| (PagEdge {
+                source: PagNode::from(&from),
+                destination: PagNode::from(&to),
+                edge_type: from.activity_type,
+                operator_id: None,
+                traverse: TraversalType::Unbounded,
+            }, t, 1))
     }
-
-    // fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-    //     let narrowed = self.filter(|x| x.activity_type == ActivityType::ControlMessage || x.activity_type == ActivityType::DataMessage);
-
-    //     let sent = narrowed
-    //         .filter(|x| x.event_type == EventType::Sent)
-    //         .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
-
-    //     let received = narrowed
-    //         .filter(|x| x.event_type == EventType::Received)
-    //         .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
-
-    //     sent.join_edges(index, &received)
-    //         .map(|(from, to, t)| (PagEdge {
-    //             source: PagNode::from(&from),
-    //             destination: PagNode::from(&to),
-    //             edge_type: from.activity_type,
-    //             operator_id: None,
-    //             traverse: TraversalType::Unbounded,
-    //         }, t, 1))
-    // }
 }
 
 trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where D: Data + Hash + Eq + Abomonation + Send + Sync {
