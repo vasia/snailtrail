@@ -1,0 +1,148 @@
+angles w32, 5
+
+real    0m24.701s
+user    9m52.409s
+sys     1m20.014s
+tmpfs                                                                           252G   16G  237G   7% /dev/shm
+inspect w1, 5
+
+real    7m7.354s
+user    5m0.879s
+sys     2m6.445s
+inspect w2, 5
+
+real    6m29.247s
+user    10m9.938s
+sys     2m39.966s
+inspect w4, 5
+
+real    6m1.680s
+user    19m48.370s
+sys     3m49.065s
+inspect w8, 5
+
+real    2m38.048s
+user    16m46.093s
+sys     3m16.651s
+inspect w16, 5
+
+real    2m40.199s
+user    35m55.792s
+sys     4m31.752s
+inspect w32, 5
+
+real    2m35.199s
+user    66m10.595s
+sys     10m2.557s
+-------
+triangles w32, 50
+
+real    1m6.197s
+user    30m26.864s
+sys     2m5.188s
+tmpfs                                                                           252G   30G  223G  12% /dev/shm
+inspect w1, 50
+
+real    12m20.049s
+user    8m13.725s
+sys     4m6.262s
+inspect w2, 50
+
+real    8m21.905s
+user    11m33.182s
+sys     4m49.642s
+inspect w4, 50
+
+real    10m41.540s
+user    34m4.356s
+sys     7m44.300s
+inspect w8, 50
+
+real    9m2.936s
+user    61m55.500s
+sys     8m20.568s
+inspect w16, 50
+
+real    6m22.806s
+user    87m57.430s
+sys     10m17.482s
+inspect w32, 50
+
+real    4m52.875s
+user    130m1.473s
+sys     16m1.151s
+-------
+triangles w32, 200
+
+real    3m13.828s
+user    93m59.181s
+sys     4m8.401s
+tmpfs                                                                           252G   62G  191G  25% /dev/shm
+inspect w1, 200
+
+real    23m9.438s
+user    14m39.735s
+sys     8m29.604s
+inspect w2, 200
+
+real    21m6.714s
+user    31m16.790s
+sys     10m19.937s
+inspect w4, 200
+
+real    45m17.795s
+user    159m32.286s
+sys     20m6.026s
+inspect w8, 200
+
+real    26m28.000s
+user    188m29.981s
+sys     19m39.185s
+inspect w16, 200
+
+real    15m5.557s
+user    210m32.306s
+sys     23m7.006s
+inspect w32, 200
+
+real    12m41.986s
+user    355m48.905s
+sys     32m23.861s
+-------
+triangles w32, 500
+
+real    8m11.952s
+user    239m40.908s
+sys     9m38.099s
+tmpfs                                                                           252G  123G  129G  49% /dev/shm
+inspect w1, 500
+
+real    40m41.397s
+user    25m48.738s
+sys     14m52.508s
+inspect w2, 500
+
+real    33m46.056s
+user    48m52.698s
+sys     17m29.405s
+inspect w4, 500
+
+real    124m47.238s
+user    450m59.705s
+sys     45m1.628s
+inspect w8, 500
+
+real    45m19.451s
+user    326m31.714s
+sys     29m35.232s
+inspect w16, 500
+
+real    30m27.079s
+user    424m38.089s
+sys     47m4.036s
+inspect w32, 500
+
+real    31m28.255s
+user    910m17.420s
+sys     66m57.752s
+-------
