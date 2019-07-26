@@ -103,15 +103,15 @@ where I : IntoIterator,
                             }
                         }
 
-                        // sort buffered events by time
-                        buffer.sort_by_key(|(time, _data)| time.clone());
-
                         // update frontier information
                         let curr_f = antichain.frontier().to_vec();
                         let curr_f = curr_f.get(0);
 
-                        // write out buffered events up to the frontier
                         if let Some(curr_f) = curr_f {
+                            // sort buffered events by time
+                            buffer.sort_by_key(|(time, _data)| time.clone());
+
+                            // write out buffered events up to the frontier
                             buffer.iter().for_each(|(time, data)| {
                                 if time <= curr_f {
                                     total_events += data.len();
@@ -120,6 +120,9 @@ where I : IntoIterator,
                             });
                             buffer.retain(|(time, _data)| time > curr_f);
                         } else {
+                            // sort buffered events by time
+                            buffer.sort_by_key(|(time, _data)| time.clone());
+
                             for (time, data) in buffer.drain(..) {
                                 total_events += data.len();
                                 output.session(&time).give_iterator(data.iter().cloned());

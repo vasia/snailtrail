@@ -96,7 +96,7 @@ fn inspector(config: Config) {
             //         println!("w{} frontier: {:?} | took {:?}ms", index, f, timer.elapsed().as_millis());
             //         timer = std::time::Instant::now();
             // });
-            worker.step();
+            worker.step_or_park(None);
         };
 
         info!("w{} done", index);
