@@ -10,9 +10,9 @@ log = "^0.4.0"
 itertools = "^0.8"
 logformat = { version = "0.2.0", path = "../logformat" }
 timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }
-timely = "0.9"
-differential-dataflow = "0.9"
-tdiag-connect = "0.1.0"
+timely = "0.10.0"
+differential-dataflow = "0.10.0"
+tdiag-connect = { path = "../../diagnostics/connect" }
 
 [dev-dependencies]
 env_logger = "^0.6.1"

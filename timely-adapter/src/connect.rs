@@ -59,9 +59,9 @@ pub fn register_logger<T: 'static + NextEpoch + Lattice + Ord + Debug + Default 
                 // SnailTrail should be able to keep up with an online computation.
                 // If batch sizes are too large, they should be buffered. Blocking the
                 // TCP connection is not an option as it slows down the main computation.
-                stream
-                    .set_nonblocking(true)
-                    .expect("set_nonblocking call failed");
+                // stream
+                //    .set_nonblocking(true)
+                //    .expect("set_nonblocking call failed");
 
                 EventWriter::<T, _, _>::new(stream)
             })
@@ -226,7 +226,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
                     trace!("w{}@{:?} text event: {}", self.worker_index, self.curr_cap, e);
                     // info!("w{}@{:?}, overall: {}, pag: {}, elapsed: {:?}", self.worker_index, self.curr_cap, self.overall_messages, self.pag_messages, self.elapsed.elapsed());
 
-                    if self.epoch_count % 10 == 0 {
+                    if self.epoch_count % 1 == 0 {
                         if self.curr_cap.get_epoch() > 0 {
                             println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.get_epoch() - 1, self.elapsed.elapsed().as_nanos(), self.overall_messages, self.pag_messages);
                         }
@@ -241,7 +241,7 @@ impl<T, W> PAGLogger<T, W> where T: 'static + NextEpoch + Lattice + Ord + Debug 
                         // The dataflow structure is propagated to all writers.
                         self.flush_to_all();
                     } else {
-                        if self.epoch_count % 10 == 0 {
+                        if self.epoch_count % 1 == 0 {
                             self.flush_buffer();
                             self.curr_writer = (self.curr_writer + 1) % self.writers.len();
                         }

@@ -5,8 +5,8 @@ authors = ["Malte Sandstede <samalt@ethz.ch>"]
 edition = "2018"
 
 [dependencies]
-timely = "0.9"
-differential-dataflow = "^0.9"
+timely = "0.10.0"
+differential-dataflow = "0.10.0"
 logformat = { version = "0.2.0", path = "../logformat" }
 log = "^0.4.0"
 abomonation = "0.7"
