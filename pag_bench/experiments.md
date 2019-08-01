@@ -70,3 +70,10 @@
 - fdr1
 - dump to in-mem partition
 - timely LRS, differential PAG
+
+### b4
+- fdr1, fdr4
+- dump to in-mem partition
+- online stress test
+- network isn't the bottleneck, ...
+- ...but tcp socket window size is
