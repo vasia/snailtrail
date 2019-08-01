@@ -5,12 +5,17 @@
     font-size: 14px;
   }
 
+  text.label {
+    font-size: 10px;
+    font-weight: 300;
+  }
+
   #graph {
     width: 100%;
     height: 100%;
   }
   line.activity {
-    stroke: black;
+    stroke-width: 2;
   }
 /*
   .node rect {
@@ -33,7 +38,6 @@
 <script src="https://d3js.org/d3.v5.min.js"></script>
 <!--<script src="https://dagrejs.github.io/project/dagre-d3/latest/dagre-d3.js"></script>-->
 
-<script src="./pag.js"></script>
 <script type="text/javascript">
 let margins = {
   left: 50,
@@ -48,13 +52,13 @@ console.log(svg_parent);
 
 let svg = svg_parent.append("g");
 
-let x = d3.scaleLinear().domain([0, 100000]);
+let x = d3.scaleLinear().domain([pag[0].src.t / 1000000, pag[pag.length-1].dst.t / 1000000]);
 
 let xAxis = d3.axisBottom(x);
     // yAxis = d3.axisLeft(y);
 
 let zoom = d3.zoom()
-  .scaleExtent([1, 32])
+  .scaleExtent([1, 512])
   .on("zoom", zoomed);
 
 let svgXAxis = svg.append("g")
@@ -77,6 +81,20 @@ activities.selectAll("line").data(pag)
   .append('line')
   .attr('class', 'activity');
 
+activities.selectAll("text").data(pag)
+  .enter()
+  .append('text')
+  .attr('class', 'label')
+
+let types = {
+  ["BusyWaiting"]: "#e48282",
+  ["Scheduling"]: "#059dc0",
+  ["Unknown"]: "#0b6623",
+  ["DataMessage"]: "#971757",
+  ["ControlMessage"]: "#4b5f53",
+  ["Waiting"]: "#333",
+}
+
 function update() {
     let width = (window.innerWidth);
     let height = (window.innerHeight);
@@ -96,10 +114,19 @@ function update() {
       .call(xAxis.scale(xt));
 
     activities.selectAll("line").data(pag)
-      .attr('x1', (d) => xt(d.t[0]))
-      .attr('y1', 100)
-      .attr('x2', (d) => xt(d.t[1]))
-      .attr('y2', 100);
+      .attr('x1', (d) => xt(d.src.t / 1000000))
+      .attr('y1', d => 100 * (1 + d.src.w))
+      .attr('stroke', d => types[d.type])
+      .attr('x2', (d) => xt(d.dst.t / 1000000))
+      .attr('y2', d => 100 * (1 + d.dst.w))
+      .attr('stroke-dasharray', d => (d.src.w != d.dst.w) ? "5,5" : "5,0")
+
+    activities.selectAll("text").data(pag)
+      .attr("x", d => xt((d.src.t + d.dst.t) / (2 * 1000000)) - 30)
+      .attr("y", d => (((1 + d.src.w) + (1 + d.dst.w)) / 2) * 100 - 10)
+      .attr("fill", d => types[d.type])
+      .text(d => d.type)
+
 }
 
 update();
