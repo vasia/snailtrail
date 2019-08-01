@@ -1,9 +1,7 @@
-//! Data structure for a `LogRecord`.
+//! Data structure for a `LogRecord`, `Pair` two-dimensional time type.
 //! A `LogRecord` constitutes the unified `struct` representation of
 //! log messages from various stream processors.
-//!
 //! It is the underlying structure from which the PAG construction starts.
-//! If necessary, it can also be serialized e.g. into a `msgpack` representation.
 
 #![deny(missing_docs)]
 
@@ -12,118 +10,7 @@ extern crate enum_primitive_derive;
 #[macro_use]
 extern crate abomonation_derive;
 
-use std::io::{Write, Read};
 use std::cmp::Ordering;
-use num_traits::{FromPrimitive, ToPrimitive};
-
-use msgpack::decode::ValueReadError;
-use rmp as msgpack;
-
-
-/// This module contains a definition of a new timestamp time, a "pair" or product.
-///
-/// This is a minimal self-contained implementation, in that it doesn't borrow anything
-/// from the rest of the library other than the traits it needs to implement. With this
-/// type and its implementations, you can use it as a timestamp type.
-pub mod pair {
-
-    /// A pair of timestamps, partially ordered by the product order.
-    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation)]
-    pub struct Pair<S, T> {
-        /// first part of timestamp
-        pub first: S,
-        /// second part of timestampe
-        pub second: T,
-    }
-
-    impl<S, T> Pair<S, T> {
-        /// Create a new pair.
-        pub fn new(first: S, second: T) -> Self {
-            Pair { first, second }
-        }
-    }
-
-    // Implement timely dataflow's `PartialOrder` trait.
-    use timely::order::PartialOrder;
-    impl<S: PartialOrder, T: PartialOrder> PartialOrder for Pair<S, T> {
-        fn less_equal(&self, other: &Self) -> bool {
-            self.first.less_than(&other.first) ||
-               self.first.less_equal(&other.first) && self.second.less_equal(&other.second)
-        }
-    }
-
-    use timely::order::TotalOrder;
-    impl<S: TotalOrder, T: TotalOrder> TotalOrder for Pair<S, T> {}
-
-    #[test]
-    fn compare_pairs() {
-        assert!(Pair::new(0, 0).less_equal(&Pair::new(0,0)));
-        assert!(Pair::new(0, 0).less_equal(&Pair::new(0,1)));
-        assert!(Pair::new(0, 0).less_equal(&Pair::new(1,0)));
-        assert!(Pair::new(0, 1).less_equal(&Pair::new(1,0)));
-        assert!(Pair::new(1, 0).less_equal(&Pair::new(1,0)));
-        assert!(Pair::new(1, 0).less_equal(&Pair::new(1,1)));
-        assert!(!Pair::new(1, 0).less_equal(&Pair::new(0,1)));
-
-        assert!(!Pair::new(1, 1).less_equal(&Pair::new(0,1000)));
-        assert!(Pair::new(0, 1000).less_equal(&Pair::new(1, 1)));
-    }
-
-    use timely::progress::timestamp::Refines;
-    impl<S: Timestamp, T: Timestamp> Refines<()> for Pair<S, T> {
-        fn to_inner(_outer: ()) -> Self { Default::default() }
-        fn to_outer(self) -> () { () }
-        fn summarize(_summary: <Self>::Summary) -> () { () }
-    }
-
-    // Implement timely dataflow's `PathSummary` trait.
-    // This is preparation for the `Timestamp` implementation below.
-    use timely::progress::PathSummary;
-
-    impl<S: Timestamp, T: Timestamp> PathSummary<Pair<S,T>> for () {
-        fn results_in(&self, timestamp: &Pair<S, T>) -> Option<Pair<S,T>> {
-            Some(timestamp.clone())
-        }
-        fn followed_by(&self, other: &Self) -> Option<Self> {
-            Some(other.clone())
-        }
-    }
-
-    // Implement timely dataflow's `Timestamp` trait.
-    use timely::progress::Timestamp;
-    impl<S: Timestamp, T: Timestamp> Timestamp for Pair<S, T> {
-        type Summary = ();
-    }
-
-    // Implement differential dataflow's `Lattice` trait.
-    // This extends the `PartialOrder` implementation with additional structure.
-    use differential_dataflow::lattice::Lattice;
-    impl<S: Lattice, T: Lattice> Lattice for Pair<S, T> {
-        fn minimum() -> Self { Pair { first: S::minimum(), second: T::minimum() }}
-        fn join(&self, other: &Self) -> Self {
-            Pair {
-                first: self.first.join(&other.first),
-                second: self.second.join(&other.second),
-            }
-        }
-        fn meet(&self, other: &Self) -> Self {
-            Pair {
-                first: self.first.meet(&other.first),
-                second: self.second.meet(&other.second),
-            }
-        }
-    }
-
-    use std::fmt::{Formatter, Error, Debug};
-
-    /// Debug implementation to avoid seeing fully qualified path names.
-    impl<TOuter: Debug, TInner: Debug> Debug for Pair<TOuter, TInner> {
-        fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-            f.write_str(&format!("({:?}, {:?})", self.first, self.second))
-        }
-    }
-
-}
 
 /// The various types of activity that can happen in a dataflow.
 /// `Unknown` et al. shouldn't be emitted by instrumentation. Instead,
@@ -164,28 +51,6 @@ pub enum ActivityType {
     BusyWaiting = 13,
 }
 
-impl ActivityType {
-    /// Mapps activity types to whether this activity is local
-    /// to a worker
-    pub fn is_worker_local(&self) -> bool {
-        match *self {
-            ActivityType::Input => true,
-            ActivityType::Buffer => true,
-            ActivityType::Scheduling => true,
-            ActivityType::Processing => true,
-            ActivityType::BarrierProcessing => true,
-            ActivityType::Serialization => true,
-            ActivityType::Deserialization => true,
-            ActivityType::FaultTolerance => false,
-            ActivityType::ControlMessage => false,
-            ActivityType::DataMessage => false,
-            ActivityType::Unknown => true,
-            ActivityType::Waiting => true,
-            ActivityType::BusyWaiting => true,
-        }
-    }
-}
-
 /// What "side" of the event did we log? E.g., for
 /// scheduling events, it might be the start or end of the event;
 /// for messages, we might log the sender or receiver.
@@ -203,27 +68,6 @@ pub enum EventType {
     Bogus = 5,
 }
 
-/// Potential errors while reading a serialized log
-#[derive(Debug, Clone)]
-pub enum LogReadError {
-    /// end of file error
-    Eof,
-    /// decoding error
-    DecodeError(String),
-}
-
-impl From<String> for LogReadError {
-    fn from(msg: String) -> Self {
-        LogReadError::DecodeError(msg)
-    }
-}
-
-impl<'a> From<&'a str> for LogReadError {
-    fn from(msg: &'a str) -> Self {
-        LogReadError::DecodeError(msg.to_owned())
-    }
-}
-
 /// A worker ID
 pub type Worker = u64;
 /// An event timestamp
@@ -235,9 +79,6 @@ pub type OperatorId = u64;
 /// A worker-local channel ID
 pub type ChannelId = u64;
 
-// ***************************************************************************
-// * Please always update tests and java/c++ code after changing the schema. *
-// ***************************************************************************
 
 /// A `LogRecord` constitutes the unified `struct` representation of
 /// log messages from various stream processors.
@@ -291,125 +132,107 @@ impl std::fmt::Debug for LogRecord {
     }
 }
 
-impl LogRecord {
-    /// Serializes a `LogRecord` to msgpack
-    pub fn write<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let remote_worker = if let Some(x) = self.remote_worker { x as i64 } else { -1 };
-        let operator_id = if let Some(x) = self.operator_id { x as i64 } else { -1 };
-        let channel_id = if let Some(x) = self.channel_id { x as i64 } else { -1 };
-        let correlator_id = if let Some(x) = self.correlator_id { x as i64 } else { -1 };
 
-        msgpack::encode::write_uint(writer, self.seq_no)?;
-        msgpack::encode::write_uint(writer, self.epoch)?;
-        msgpack::encode::write_uint(writer, self.timestamp.as_secs())?;
-        msgpack::encode::write_uint(writer, self.timestamp.subsec_nanos().into())?;
-        msgpack::encode::write_uint(writer, self.local_worker)?;
-        msgpack::encode::write_uint(writer, self.activity_type.to_u64().unwrap())?;
-        msgpack::encode::write_uint(writer, self.event_type.to_u64().unwrap())?;
-        msgpack::encode::write_sint(writer, remote_worker)?;
-        msgpack::encode::write_sint(writer, operator_id)?;
-        msgpack::encode::write_sint(writer, channel_id)?;
-        msgpack::encode::write_sint(writer, correlator_id)?;
-        Ok(())
+/// This module contains a definition of a new timestamp time, a "pair" or product.
+///
+/// Note: Its partial order trait is modified so that it follows a lexicographical order;
+/// It is not truly partially ordered (cf. the `compare_pairs` test)!
+pub mod pair {
+    use differential_dataflow::lattice::Lattice;
+
+    use timely::{
+        order::{PartialOrder, TotalOrder},
+        progress::{timestamp::Refines, PathSummary, Timestamp}
+    };
+
+    use std::fmt::{Formatter, Error, Debug};
+
+    /// A pair of timestamps, partially ordered by the product order.
+    #[derive(Hash, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Abomonation)]
+    pub struct Pair<S, T> {
+        /// first part of timestamp
+        pub first: S,
+        /// second part of timestampe
+        pub second: T,
     }
 
-    /// Deserializes a `LogRecord` to msgpack
-    pub fn read<R: Read>(reader: &mut R) -> Result<LogRecord, LogReadError> {
-        // TODO: this method should return the error cause as an enum so that the caller can test
-        // whether failures were due to having reached the end of the file (break), due to invalid
-        // data (show partially-decoded data), or some other reason.
-
-        let seq_no = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode seq_no: {:?}", read_err))?;
-        let epoch = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode epoch: {:?}", read_err))?;
-        let ts_secs = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode ts_secs: {:?}", read_err))?;
-        let ts_nanos = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode ts_nanos: {:?}", read_err))?;
-        let local_worker = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode local_worker: {:?}", read_err))?;
-        let activity_type = ActivityType::from_u64(msgpack::decode::read_int(reader).map_err(|read_err| format!("{:?}", read_err))?)
-                    .ok_or("invalid value for activity_type")?;
-        let event_type = EventType::from_u64(msgpack::decode::read_int(reader).map_err(|read_err| format!("{:?}", read_err))?)
-                    .ok_or("invalid value for event_type")?;
-        let remote_worker =
-            {
-                let val: i64 = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode remote_worker: {:?}", read_err))?;
-                if val == -1 { None } else { Some(val as u64) }
-            };
-        let operator_id = {
-            let val: i64 =
-                msgpack::decode::read_int(reader)
-                    .map_err(|read_err| format!("cannot decode operator_id: {:?}", read_err))?;
-            if val == -1 { None } else { Some(val as u64) }
-        };
-        let channel_id = {
-            let val: i64 =
-                msgpack::decode::read_int(reader)
-                    .map_err(|read_err| format!("cannot decode channel_id: {:?}", read_err))?;
-            if val == -1 { None } else { Some(val as u64) }
-        };
-        let correlator_id =
-            {
-                let val: i64 = msgpack::decode::read_int(reader).map_err(|read_err| format!("cannot decode correlator_id: {:?}", read_err))?;
-                if val == -1 { None } else { Some(val as u64) }
-            };
-
-        Ok(LogRecord {
-            seq_no,
-            epoch,
-            timestamp: std::time::Duration::new(ts_secs, ts_nanos),
-            local_worker,
-            activity_type,
-            event_type,
-            correlator_id,
-            remote_worker,
-            operator_id,
-            channel_id,
-        })
+    impl<S, T> Pair<S, T> {
+        /// Create a new pair.
+        pub fn new(first: S, second: T) -> Self {
+            Pair { first, second }
+        }
     }
-}
 
-#[test]
-fn logrecord_roundtrip() {
-    // one record
-    let mut v = Vec::with_capacity(2048);
-    let r = LogRecord {
-        seq_no: 12345,
-        epoch: 4,
-        timestamp: std::time::Duration::new(2, 23334),
-        local_worker: 123,
-        activity_type: ActivityType::DataMessage,
-        event_type: EventType::Start,
-        correlator_id: Some(12),
-        remote_worker: Some(15),
-        operator_id: Some(3),
-        channel_id: Some(12),
-    };
-    r.write(&mut v).unwrap();
-    let r_out = LogRecord::read(&mut &v[..]).unwrap();
-    assert!(r == r_out);
-    let r2 = {
-        let mut r2 = r.clone();
-        r2.local_worker = 16;
-        r2.correlator_id = None;
-        r2
-    };
-    println!("{:?}", r2);
-    let r3 = {
-        let mut r3 = r.clone();
-        r3.event_type = EventType::End;
-        r3
-    };
-    // multiple records
-    println!("### {:?}", v);
-    r2.write(&mut v).unwrap();
-    println!("{:?}", v);
-    r3.write(&mut v).unwrap();
-    println!("{:?}", v);
-    let reader = &mut &v[..];
-    assert!(r == LogRecord::read(reader).unwrap());
-    println!(">> {:?}", reader);
-    let r2_out = LogRecord::read(reader);
-    println!("{:?}", r2_out);
-    assert!(r2 == r2_out.unwrap());
-    println!(">> {:?}", reader);
-    assert!(r3 == LogRecord::read(reader).unwrap());
-    println!(">> {:?}", reader);
+    /// Implement timely dataflow's `PartialOrder` trait.
+    /// Note: This is in fact a total order implementation!
+    impl<S: PartialOrder, T: PartialOrder> PartialOrder for Pair<S, T> {
+        fn less_equal(&self, other: &Self) -> bool {
+            self.first.less_than(&other.first) ||
+               self.first.less_equal(&other.first) && self.second.less_equal(&other.second)
+        }
+    }
+
+    impl<S: TotalOrder, T: TotalOrder> TotalOrder for Pair<S, T> {}
+
+    #[test]
+    fn compare_pairs() {
+        assert!(Pair::new(0, 0).less_equal(&Pair::new(0,0)));
+        assert!(Pair::new(0, 0).less_equal(&Pair::new(0,1)));
+        assert!(Pair::new(0, 0).less_equal(&Pair::new(1,0)));
+        assert!(Pair::new(0, 1).less_equal(&Pair::new(1,0)));
+        assert!(Pair::new(1, 0).less_equal(&Pair::new(1,0)));
+        assert!(Pair::new(1, 0).less_equal(&Pair::new(1,1)));
+        assert!(!Pair::new(1, 0).less_equal(&Pair::new(0,1)));
+
+        assert!(!Pair::new(1, 1).less_equal(&Pair::new(0,1000)));
+        assert!(Pair::new(0, 1000).less_equal(&Pair::new(1, 1)));
+    }
+
+    impl<S: Timestamp, T: Timestamp> Refines<()> for Pair<S, T> {
+        fn to_inner(_outer: ()) -> Self { Default::default() }
+        fn to_outer(self) -> () { () }
+        fn summarize(_summary: <Self>::Summary) -> () { () }
+    }
+
+    /// Implement timely dataflow's `PathSummary` trait.
+    /// This is preparation for the `Timestamp` implementation below.
+    impl<S: Timestamp, T: Timestamp> PathSummary<Pair<S,T>> for () {
+        fn results_in(&self, timestamp: &Pair<S, T>) -> Option<Pair<S,T>> {
+            Some(timestamp.clone())
+        }
+        fn followed_by(&self, other: &Self) -> Option<Self> {
+            Some(other.clone())
+        }
+    }
+
+    /// Implement timely dataflow's `Timestamp` trait.
+    impl<S: Timestamp, T: Timestamp> Timestamp for Pair<S, T> {
+        type Summary = ();
+    }
+
+    /// Implement differential dataflow's `Lattice` trait.
+    /// This extends the `PartialOrder` implementation with additional structure.
+    impl<S: Lattice, T: Lattice> Lattice for Pair<S, T> {
+        fn minimum() -> Self { Pair { first: S::minimum(), second: T::minimum() }}
+        fn join(&self, other: &Self) -> Self {
+            Pair {
+                first: self.first.join(&other.first),
+                second: self.second.join(&other.second),
+            }
+        }
+        fn meet(&self, other: &Self) -> Self {
+            Pair {
+                first: self.first.meet(&other.first),
+                second: self.second.meet(&other.second),
+            }
+        }
+    }
+
+
+    /// Debug implementation to avoid seeing fully qualified path names.
+    impl<TOuter: Debug, TInner: Debug> Debug for Pair<TOuter, TInner> {
+        fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+            f.write_str(&format!("({:?}, {:?})", self.first, self.second))
+        }
+    }
 }
