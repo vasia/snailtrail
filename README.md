@@ -47,13 +47,13 @@ fn main() {
 
 ### 2. Run in offline mode
 
-1. Simply run the source computation
+1. Run the source computation as you would normally.
 2. To analyze the generated offline trace with SnailTrail, from `timely-snailtrail`, run `cargo run --example inspect <# source computation peers> false`.
 
 ### 3. Run in online mode
 
 1. From `timely-snailtrail`, run `cargo run --example inspect <# source computation peers> true <IP> <PORT>`.
-2. Attach the source computation with `SNAILTRAIL_ADDR=<IP>:<PORT>` set as env variable.
+2. Attach the source computation by running it with `SNAILTRAIL_ADDR=<IP>:<PORT>` set as env variable.
 
 ## Examples
 
