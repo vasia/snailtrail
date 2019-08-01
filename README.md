@@ -6,47 +6,69 @@
 
 This is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a tool to run online critical path analysis on various stream processors (see also the [SnailTrail NSDI'18 Paper](https://doi.org/10.3929/ethz-b-000228581)).
 
-The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.9 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow) and won't refrain from breaking existing upstream abstractions (even though they should be relatively easy to add back in at a later point in time).
+The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.10 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow) and won't refrain from breaking existing upstream abstractions (even though they should be relatively easy to add back in at a later point in time).
 
-## Getting Started
+## Getting Started 
 
-To try out SnailTrail, decide between online (via TCP) and offline (from file) mode.
+### 1. Attach SnailTrail to a source computation via `timely-adapter`
 
-### Offline
+Use `timely-adapter/examples/minimal.rs` as a starting point:
 
-1. First, start a computation you would like to log: As example, `cargo run --example triangles <input file> <batch size> <load balance factor> <#computation workers>` from within `timely-adapter`.
+```rust
+use timely_adapter::connect::Adapter;
 
-    E.g., `cargo run --example triangles livejournal.graph 100 3 -w2` will load the `livejournal.graph` to use in the triangles computation, which is started with a batch size of 100. It is distributed over two workers, which will each write out events to three files.
+fn main() {
+    timely::execute_from_args(std::env::args(), |worker| {
+        // (A) Create SnailTrail adapter at the beginning of the worker closure
+        let adapter = Adapter::attach(worker);
 
-    If you don't have the triangles computation ready, you can try a very basic log that is easily tweakable with `cargo run --example custom_operator 3 -w2`.
-2. Run SnailTrail to create a PAG: From `timely-snailtrail`, run `cargo run --example inspect <# SnailTrail workers> <# of (simulated) source computation workers> <from-file?>`.
+        // Some computation
+        let mut input = InputHandle::new();
+        let probe = worker.dataflow(|scope|
+            scope.input_from(&mut input)
+                 .exchange(|x| *x)
+                 .inspect(move |x| println!("hello {}", x))
+                 .probe()
+        );
 
-    E.g., `cargo run --example inspect 2 6 f` will run SnailTrail with two workers, reading from the 6 files (`2 workers * 3 load balance factor`) we generated in step 1.
-3. This creates a PAG as a differential `Collection`, to log it and use it, tweak `timely-snailtrail/examples/inspect.rs`.
+        for round in 0..100 {
+            if worker.index() == 0 { input.send(round); }
+            input.advance_to(round + 1);
+            while probe.less_than(input.time()) { worker.step(); }
 
-### Online
+            // (B) Communicate epoch completion
+            adapter.tick_epoch();
+        }
+    }).unwrap();
+}
+```
 
-1. First start SnailTrail, similarly to Offline step 2, but without the `from-file?` flag set; e.g.: `cargo run --example inspect 2 6`.
-2. Now, start the computation you would like to log with env variable `SNAILTRAIL_ADDR=localhost:8000`.
+**Make sure to place the adapter at the top of the timely closure.**
 
-    E.g., just like in offline mode: `env SNAILTRAIL_ADDR=localhost:8000 cargo run --example triangles livejournal.graph 100 3 -w2`
-3. This creates a PAG, to log it and use it, tweak `timely-snailtrail/examples/inspect.rs`.
+### 2. Run in offline mode
 
-### Debugging
+1. Simply run the source computation
+2. To analyze the generated offline trace with SnailTrail, from `timely-snailtrail`, run `cargo run --example inspect <# source computation peers> false`.
 
-Further debug logging of the examples and SnailTrail is provided by Rust's `log` and `env_log` crates. Passing `RUST_LOG=info` (or `trace`) as env variable when running examples should write out further logging to your `std::out`.
+### 3. Run in online mode
 
-There's also a WIP PAG visualization that can be used for sanity checking / manually identifiying patterns. To use it, run `cargo run --example viz <# SnailTrail workers> <# source computation workers> <output path>.html <from-file?>` from `timely-snailtrail`. After the computation has finished, press enter to create a `<output path>.html` file which contains an interactive PAG visualization.
+1. From `timely-snailtrail`, run `cargo run --example inspect <# source computation peers> true <IP> <PORT>`.
+2. Attach the source computation with `SNAILTRAIL_ADDR=<IP>:<PORT>` set as env variable.
+
+## Examples
+
+- Visit `timely-adapter/examples` for source computation examples.
+- Visit `timely-snailtrail/examples/inspect.rs` for a basic SnailTrail inspector example.
 
 ### Show me the code!
 
 Check out the `Structure` section of this `README` for a high-level overview.
 
 The "magic" mostly happens at
-- `timely-adapter/src/connect.rs` for (1) logging a computation and (2) connecting to it from SnailTrail,
+- `timely-adapter/src/connect.rs` for logging a computation
 - `timely-adapter/src/lib.rs` for the `LogRecord` creation,
 - `timely-snailtrail/src/pag.rs` for the `PAG` creation, and the
-- `inspect.rs`, `triangles.rs` and `custom_operator.rs` examples tying it all together.
+- `inspect.rs`, `triangles.rs`, and `minimal.rs` tying it all together.
 
 ## Structure
 
