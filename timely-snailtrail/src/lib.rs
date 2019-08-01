@@ -20,21 +20,6 @@ pub mod algo;
 /// Contains the PAG construction
 pub mod pag;
 
-/// Config with which the PAG dataflow is run
-#[derive(Clone, Debug)]
-pub struct Config {
-    /// Arguments that should be passed to the underlying timely computation
-    pub timely_args: Vec<String>,
-    /// # of workers the profiled computation runs on
-    pub source_peers: usize,
-    /// whether SnailTrail should read from file or TCP
-    pub online: Option<(String, u16)>,
-    /// # of SnailTrail workers
-    pub worker_peers: usize,
-    /// max epochs in flight
-    pub throttle: u64,
-}
-
 // /// Elements of a complete activity graph, including ingress/egress points
 // #[derive(Abomonation, Clone, Debug, Eq, Hash, PartialEq)]
 // pub enum PagOutput {
