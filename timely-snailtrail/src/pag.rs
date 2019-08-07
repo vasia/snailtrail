@@ -91,6 +91,8 @@ pub struct PagEdge {
     pub operator_id: Option<OperatorId>,
     /// Edge dependency information
     pub traverse: TraversalType,
+    /// record count
+    pub length: Option<usize>,
 }
 
 impl Ord for PagEdge {

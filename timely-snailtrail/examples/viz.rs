@@ -108,7 +108,7 @@ pub fn render(output_path: &String, worker_handles: WorkerGuards<()>, pag: mpsc:
     for edge in pag.extract().into_iter().flat_map(|(_t, v)| v) {
         expect_write(writeln!(
             file,
-            "{{ src: {{ t: {}, w: {}, e: {} }}, dst: {{ t: {}, w: {}, e: {} }}, type: \"{:?}\", o: \"{:?}\", tr: \"{:?}\" }},",
+            "{{ src: {{ t: {}, w: {}, e: {} }}, dst: {{ t: {}, w: {}, e: {} }}, type: \"{:?}\", o: {}, tr: \"{:?}\", l: {} }},",
             edge.source.timestamp.as_nanos(),
             edge.source.worker_id,
             edge.source.epoch,
@@ -116,8 +116,9 @@ pub fn render(output_path: &String, worker_handles: WorkerGuards<()>, pag: mpsc:
             edge.destination.worker_id,
             edge.destination.epoch,
             edge.edge_type,
-            edge.operator_id,
+            edge.operator_id.unwrap_or(0),
             edge.traverse,
+            edge.length.unwrap_or(0)
         ))
     }
     expect_write(writeln!(file, "];"));

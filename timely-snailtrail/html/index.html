@@ -1,135 +1,133 @@
 <style>
   body, text {
-    font-weight: 300;
-    font-family: "Helvetica Neue", Helvetica, Arial, sans-serf;
-    font-size: 14px;
+      font-weight: 300;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serf;
+      font-size: 14px;
   }
 
   text.label {
-    font-size: 10px;
-    font-weight: 300;
+      font-size: 10px;
+      font-weight: 300;
   }
 
   #graph {
-    width: 100%;
-    height: 100%;
+      width: 100%;
+      height: 90%;
   }
-  line.activity {
-    stroke-width: 2;
-  }
-/*
-  .node rect {
-    stroke: #333;
-    fill: #fff;
-  }
-
-  .edgePath path {
-    stroke: #333;
-    fill: #333;
-    stroke-width: 1.5px;
-  }
-
-  .node text {
-    pointer-events: none;
-  }
-*/
 </style>
-<body></body>
+<body>
+  <p>
+    <form>
+      <input type="text" value="3" id="epoch">
+    </form>
+    <button onclick="setEpoch()">set epoch</button>
+  </p>
+</body>
 <script src="https://d3js.org/d3.v5.min.js"></script>
-<!--<script src="https://dagrejs.github.io/project/dagre-d3/latest/dagre-d3.js"></script>-->
 
 <script type="text/javascript">
-let margins = {
-  left: 50,
-  top: 20,
-  right: 50,
-  bottom: 50,
-};
+  let types = {
+    ["Processing"]: "#0b6623",
+    ["Spinning"]: "#e48282",
+    ["ControlMessage"]: "#4b5f53",
+    ["DataMessage"]: "#971757",
+    ["Waiting"]: "#FF0000",
+    ["Busy"]: "#059dc0",
+  }
 
-let svg_parent = d3.select("body").append("svg").attr("id", "graph");
+  let margins = {
+    left: 50,
+    top: 20,
+    right: 50,
+    bottom: 50,
+  }
 
-console.log(svg_parent);
+  let state = {
+    filteredPag: pag,
+    lastTransform: d3.zoomIdentity,
+    x: null,
+    xAxis: null,
+    zoom: d3.zoom().scaleExtent([1, 512]).on("zoom", () => {
+      state.lastTransform = d3.event.transform;
+      update();
+    }),
+    svgParent: d3.select("body").append("svg").attr("id", "graph"),
+    svg: null,
+    svgXAxis: null,
+    activities: null,
+  }
 
-let svg = svg_parent.append("g");
+  state.svg = state.svgParent.append("g")
+  state.svgXAxis = state.svg.append("g").attr("class", "axis axis--x")
+  state.activities = state.svg.append("g")
 
-let x = d3.scaleLinear().domain([pag[0].src.t / 1000000, pag[pag.length-1].dst.t / 1000000]);
+  const genTitle = d => `${d.type} ${d.o === 0 ? '' : 'Op' + d.o + ' '}${d.l > 0 ? '(' + d.l + ')' : ''}`
 
-let xAxis = d3.axisBottom(x);
-    // yAxis = d3.axisLeft(y);
+  setEpoch()
+  d3.select(window).on('resize', update);
 
-let zoom = d3.zoom()
-  .scaleExtent([1, 512])
-  .on("zoom", zoomed);
+  function setEpoch() {
+    let epoch = parseInt(document.getElementById("epoch").value);
+    state.filteredPag = pag.filter(p => p.src.e === epoch);
 
-let svgXAxis = svg.append("g")
-  .attr("class", "axis axis--x");
-  // .call(xAxis);
+    state.x = d3.scaleLinear().domain([state.filteredPag[0].src.t / 1000000, state.filteredPag[state.filteredPag.length-1].dst.t / 1000000]);
+    state.xAxis = d3.axisBottom(state.x);
 
-let activities = svg.append("g");
+    state.activities.selectAll("line").data(state.filteredPag)
+      .enter()
+      .append('line')
+      .attr('class', 'activity')
 
-let state = {
-  last_transform: d3.zoomIdentity,
-}
+    state.activities.selectAll("line").data(state.filteredPag)
+      .exit()
+      .remove()
 
-function zoomed() {
-  state.last_transform = d3.event.transform; //, xt = t.rescaleX(x);
-  update();
-}
+    state.activities.selectAll("text").data(state.filteredPag)
+      .enter()
+      .append('text')
+      .attr('class', 'label')
 
-activities.selectAll("line").data(pag)
-  .enter()
-  .append('line')
-  .attr('class', 'activity');
+    state.activities.selectAll("text").data(state.filteredPag)
+      .exit()
+      .remove()
 
-activities.selectAll("text").data(pag)
-  .enter()
-  .append('text')
-  .attr('class', 'label')
+    state.svgParent.transition()
+      .duration(50)
+      .call(state.zoom.transform, d3.zoomIdentity);
 
-let types = {
-  ["BusyWaiting"]: "#e48282",
-  ["Scheduling"]: "#059dc0",
-  ["Unknown"]: "#0b6623",
-  ["DataMessage"]: "#971757",
-  ["ControlMessage"]: "#4b5f53",
-  ["Waiting"]: "#333",
-}
+    update()
+  }
 
-function update() {
+  function update() {
     let width = (window.innerWidth);
-    let height = (window.innerHeight);
+    let height = (window.innerHeight - 100);
 
-    x.range([margins.left, width - margins.right]);
+    let domain = [state.filteredPag[0].src.t / 1000000, state.filteredPag[state.filteredPag.length-1].dst.t / 1000000];
+    state.x = d3.scaleLinear().domain(domain);
+    state.x.range([margins.left, width - margins.right]);
 
-    // zoom
-      // .translateExtent([[0, 0], [width - margins.left - margins.right, 0]]);
-      // .extent([[margins.left, margins.top], [width - margins.right, height - margins.bottom]])
+    state.svgParent.call(state.zoom);
+    let xt = state.lastTransform.rescaleX(state.x);
 
-    svg_parent.call(zoom);
-
-    let xt = state.last_transform.rescaleX(x);
-
-    svgXAxis
+    state.svgXAxis
       .attr("transform", "translate(0," + (height - margins.bottom) + ")")
-      .call(xAxis.scale(xt));
+      .call(state.xAxis.scale(xt));
 
-    activities.selectAll("line").data(pag)
+    state.activities.selectAll("line").data(state.filteredPag)
       .attr('x1', (d) => xt(d.src.t / 1000000))
       .attr('y1', d => 100 * (1 + d.src.w))
       .attr('stroke', d => types[d.type])
+      .attr('stroke-width', d => d.src.w !== d.dst.w ? 1.5 : 2 )
       .attr('x2', (d) => xt(d.dst.t / 1000000))
       .attr('y2', d => 100 * (1 + d.dst.w))
-      .attr('stroke-dasharray', d => (d.src.w != d.dst.w) ? "5,5" : "5,0")
+      .attr('stroke-opacity', d => d.src.w !== d.dst.w ? 0.3 : 1)
+      .attr('stroke-dasharray', d => (d.src.w !== d.dst.w) ? "5,5" : "5,0")
 
-    activities.selectAll("text").data(pag)
+    state.activities.selectAll("text").data(state.filteredPag)
       .attr("x", d => xt((d.src.t + d.dst.t) / (2 * 1000000)) - 30)
       .attr("y", d => (((1 + d.src.w) + (1 + d.dst.w)) / 2) * 100 - 10)
       .attr("fill", d => types[d.type])
-      .text(d => d.type)
-
-}
-
-update();
-d3.select(window).on('resize', update);
+      .text(genTitle)
+  }
 
 </script>
