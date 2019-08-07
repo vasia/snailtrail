@@ -89,7 +89,6 @@ fn prep_pag() -> (String, WorkerGuards<()>, mpsc::Receiver<Event<Pair<u64, Durat
         worker.dataflow(|scope| {
             pag::create_pag(scope, readers, index, 1)
                 .map(|(x, _t, _diff)| x)
-                .filter(|x| x.source.epoch == 2)
                 .capture_into(pag_send);
         });
     })

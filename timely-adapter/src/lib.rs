@@ -1,7 +1,5 @@
-//! Connects to a TimelyDataflow / DifferentialDataflow instance that is run with
-//! `TIMELY_WORKER_LOG_ADDR` env variable set and constructs a single epoch PAG
-//! from the received log trace.
-
+//! Replays event streams from Timely / Differential
+//! and constructs a stream of LogRecords from them.
 #![deny(missing_docs)]
 
 #[macro_use]
@@ -30,7 +28,7 @@ use timely::{
     },
 };
 
-/// Returns a `Collection` of `LogRecord`s that can be used for PAG construction.
+/// Returns a `Stream` of `LogRecord`s that can be used for PAG construction.
 pub fn create_lrs<S, R>(
     scope: &mut S,
     replayers: Vec<Replayer<S::Timestamp, R>>,
@@ -47,7 +45,7 @@ where
 }
 
 /// Operator that converts a Stream of TimelyEvents to their LogRecord representation
-trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> {
+pub trait ConstructLRs<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Constructs a stream of log records to be used in PAG construction from an event stream.
     fn construct_lrs(&self, index: usize) -> Stream<S, LogRecord>;
     /// Strips an event `Stream` of encompassing operators
@@ -71,14 +69,11 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
         let mut vector = Vec::new();
         let mut outer_operates = std::collections::BTreeSet::new();
         let mut ids_to_addrs = std::collections::HashMap::new();
-        // let mut total = 0;
 
         self.unary(Pipeline, "Peel", move |_, _| { move |input, output| {
-            // let timer = std::time::Instant::now();
-
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
-                for (epoch, seq_no, (t, wid, x)) in vector.drain(..) {
+                for (epoch, seq_no, length, (t, wid, x)) in vector.drain(..) {
                     match x {
                         Operates(e) => {
                             let mut addr = e.addr.clone();
@@ -92,48 +87,35 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
 
                             let addr = ids_to_addrs.get(&e.id).expect("operates went wrong");
                             if !outer_operates.contains(addr) {
-                                output.session(&cap).give((epoch, seq_no, (t, wid, x)));
+                                output.session(&cap).give((epoch, seq_no, length, (t, wid, x)));
                             }
                         }
                         _ => {
                             assert!(cap.time() > &Pair::new(0, Default::default()));
 
-                            output.session(&cap).give((epoch, seq_no, (t, wid, x)));
+                            output.session(&cap).give((epoch, seq_no, length, (t, wid, x)));
                         }
                     }
                 }
-
-                // if cap.time().first > 29996 {
-                    // total += timer.elapsed().as_nanos();
-                    // println!("w{} peel_ops time: {}ms", index, total / 1_000_000);
-                // }
             });
-            // total += timer.elapsed().as_nanos();
         }})
     }
 
     fn make_lrs(&self, _index: usize) -> Stream<S, LogRecord> {
         let mut vector = Vec::new();
-        // let mut total = 0;
 
         self.unary(Pipeline, "LogRecordConstruct", move |_, _| { move |input, output| {
-            // let timer = std::time::Instant::now();
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
                 output.session(&cap).give_iterator(vector.drain(..).flat_map(|x| Self::build_lr(x).into_iter()));
-                // @TODO: handle retractions (record.1.first += 1; record.2 = -1)
-
-                // if cap.time().first > 29996 {
-                    // total += timer.elapsed().as_nanos();
-                    // println!("w{} make_lrs time: {}ms", index, total / 1_000_000);
-                // }
             });
-            // total += timer.elapsed().as_nanos();
         }})
     }
 
     fn build_lr(comp_event: CompEvent) -> Option<LogRecord> {
-        let (epoch, seq_no, (t, wid, x)) = comp_event;
+        let (epoch, seq_no, length, (timestamp, wid, x)) = comp_event;
+        let local_worker = wid as u64;
+
         match x {
             // Scheduling & Processing
             Schedule(event) => {
@@ -144,20 +126,23 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
                 };
 
                 Some(LogRecord {
-                        seq_no,
-                        epoch,
-                        timestamp: t,
-                        local_worker: wid as u64,
-                        activity_type: ActivityType::Scheduling,
-                        event_type,
-                        remote_worker: None,
-                        operator_id: Some(event.id as u64),
-                        channel_id: None,
-                        correlator_id: None,
-                    })
+                    seq_no,
+                    epoch,
+                    timestamp,
+                    local_worker,
+                    activity_type: ActivityType::Scheduling,
+                    event_type,
+                    remote_worker: None,
+                    operator_id: Some(event.id as u64),
+                    channel_id: None,
+                    correlator_id: None,
+                    length,
+                })
             }
             // remote data messages
             Messages(event) => {
+                assert!(length.unwrap() == event.length);
+
                 let remote_worker = if event.is_send {
                     Some(event.target as u64)
                 } else {
@@ -171,17 +156,18 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
                 };
 
                 Some(LogRecord {
-                        seq_no,
-                        epoch,
-                        timestamp: t,
-                        local_worker: wid as u64,
-                        activity_type: ActivityType::DataMessage,
-                        event_type,
-                        remote_worker,
-                        operator_id: None,
-                        channel_id: Some(event.channel as u64),
-                        correlator_id: Some(event.seq_no as u64),
-                    })
+                    seq_no,
+                    epoch,
+                    timestamp,
+                    local_worker,
+                    activity_type: ActivityType::DataMessage,
+                    event_type,
+                    remote_worker,
+                    operator_id: None,
+                    channel_id: Some(event.channel as u64),
+                    correlator_id: Some(event.seq_no as u64),
+                    length
+                })
             }
             // Control Messages
             Progress(event) => {
@@ -200,17 +186,18 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
                 };
 
                 Some(LogRecord {
-                        seq_no,
-                        epoch,
-                        timestamp: t,
-                        local_worker: wid as u64,
-                        activity_type: ActivityType::ControlMessage,
-                        event_type,
-                        remote_worker,
-                        operator_id: None,
-                        channel_id: Some(event.channel as u64),
-                        correlator_id: Some(event.seq_no as u64),
-                    })
+                    seq_no,
+                    epoch,
+                    timestamp,
+                    local_worker,
+                    activity_type: ActivityType::ControlMessage,
+                    event_type,
+                    remote_worker,
+                    operator_id: None,
+                    channel_id: Some(event.channel as u64),
+                    correlator_id: Some(event.seq_no as u64),
+                    length: None,
+                })
             }
             // Channels / Operates events
             _ => None
