@@ -216,18 +216,37 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
     }
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
-        let edge_type = match (prev.event_type, record.event_type) {
-            // SchedStart ----> SchedEnd
-            (EventType::Start, EventType::End) => ActivityType::Scheduling,
-            // SchedEnd ----> SchedStart
-            (EventType::End, EventType::Start) => ActivityType::BusyWaiting,
-            // something ---> msgreceive
-            (_, EventType::Received) => ActivityType::Waiting,
-            // schedend -> remotesend, remote -> schedstart, remote -> remotesend
-            (_, _) => ActivityType::Unknown, // @TODO
+        // Rules for a well-formatted PAG
+        // No data messages before a SchedStart event (they are always between start and end)
+        // assert!((record.event_type != EventType::Start) || prev.activity_type != ActivityType::DataMessage);
+        // A message with length != None is always either a SchedEnd or a remote data recv
+        assert!(record.length.is_none() || record.activity_type == ActivityType::DataMessage || record.event_type == EventType::End);
+        assert!(prev.length.is_none() || prev.activity_type == ActivityType::DataMessage || prev.event_type == EventType::End);
+
+        let edge_type = match (prev.event_type, record.event_type, record.length) {
+            (EventType::Start, EventType::End, None) => ActivityType::Spinning,
+
+            (EventType::Start, EventType::End, Some(_)) => ActivityType::Processing,
+            (EventType::Sent, EventType::End, _) => ActivityType::Processing,
+            (EventType::Start, EventType::Sent, _) => ActivityType::Processing,
+            (EventType::Sent, EventType::Sent, _) => {
+                // println!("{:?}, {:?}", prev, record);
+                ActivityType::Processing
+            },
+
+            (EventType::End, EventType::Start, _) => ActivityType::Busy,
+            (EventType::Sent, EventType::Start, _) => ActivityType::Busy,
+            (EventType::Received, EventType::Start, _) => ActivityType::Busy,
+            (EventType::End, EventType::Sent, _) => ActivityType::Busy,
+
+            (EventType::End, EventType::Received, _) => ActivityType::Waiting,
+            (EventType::Sent, EventType::Received, _) => ActivityType::Waiting,
+            (EventType::Received, EventType::Received, _) => ActivityType::Waiting,
+
+            (_, _, _) => panic!("{:?}, {:?}", prev, record)
         };
 
-        let operator_id = if prev.operator_id == record.operator_id {
+        let operator_id = if prev.event_type != EventType::End && record.event_type != EventType::Start {
             prev.operator_id
         } else {
             None
@@ -239,12 +258,20 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
             TraversalType::Unbounded
         };
 
+        // only keep lengths for schedule edges
+        let length = if record.activity_type == ActivityType::Scheduling {
+            record.length
+        } else {
+            None
+        };
+
         PagEdge {
             source: PagNode::from(prev),
             destination: PagNode::from(record),
             edge_type,
             operator_id,
             traverse,
+            length,
         }
     }
 
@@ -266,6 +293,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
                 edge_type: from.activity_type,
                 operator_id: None,
                 traverse: TraversalType::Unbounded,
+                length: from.length,
             }, t, 1))
     }
 }
