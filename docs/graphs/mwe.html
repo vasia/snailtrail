@@ -1,0 +1,174 @@
+<script type="text/javascript">
+let pag = [
+{ src: { t: 2274287, w: 0, e: 1 }, dst: { t: 2275421, w: 0, e: 1 }, type: "Spinning", o: 1, tr: "Unbounded", l: 0 },
+{ src: { t: 2275421, w: 0, e: 1 }, dst: { t: 2283402, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 2283402, w: 0, e: 1 }, dst: { t: 4250178, w: 0, e: 1 }, type: "Processing", o: 2, tr: "Unbounded", l: 20000 },
+{ src: { t: 4250178, w: 0, e: 1 }, dst: { t: 4262115, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 4262115, w: 0, e: 1 }, dst: { t: 4495369, w: 0, e: 1 }, type: "Processing", o: 4, tr: "Unbounded", l: 20000 },
+{ src: { t: 4495369, w: 0, e: 1 }, dst: { t: 4506798, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 4506798, w: 0, e: 1 }, dst: { t: 4747613, w: 0, e: 1 }, type: "Processing", o: 6, tr: "Unbounded", l: 20000 },
+{ src: { t: 4747613, w: 0, e: 1 }, dst: { t: 4757374, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 4757374, w: 0, e: 1 }, dst: { t: 5667638, w: 0, e: 1 }, type: "Processing", o: 8, tr: "Unbounded", l: 20000 },
+{ src: { t: 5667638, w: 0, e: 1 }, dst: { t: 5683948, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 5683948, w: 0, e: 1 }, dst: { t: 5994813, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 5994813, w: 0, e: 1 }, dst: { t: 6017407, w: 0, e: 1 }, type: "Spinning", o: 2, tr: "Unbounded", l: 0 },
+{ src: { t: 6017407, w: 0, e: 1 }, dst: { t: 6022266, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 6022266, w: 0, e: 1 }, dst: { t: 6042754, w: 0, e: 1 }, type: "Spinning", o: 4, tr: "Unbounded", l: 0 },
+{ src: { t: 6042754, w: 0, e: 1 }, dst: { t: 6046979, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 6046979, w: 0, e: 1 }, dst: { t: 6065575, w: 0, e: 1 }, type: "Spinning", o: 6, tr: "Unbounded", l: 0 },
+{ src: { t: 6065575, w: 0, e: 1 }, dst: { t: 6069645, w: 0, e: 1 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 6069645, w: 0, e: 1 }, dst: { t: 6076607, w: 0, e: 1 }, type: "Spinning", o: 8, tr: "Unbounded", l: 0 },
+{ src: { t: 8793566, w: 0, e: 2 }, dst: { t: 8794663, w: 0, e: 2 }, type: "Spinning", o: 1, tr: "Unbounded", l: 0 },
+{ src: { t: 8794663, w: 0, e: 2 }, dst: { t: 8799841, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 8799841, w: 0, e: 2 }, dst: { t: 12738906, w: 0, e: 2 }, type: "Processing", o: 2, tr: "Unbounded", l: 40000 },
+{ src: { t: 12738906, w: 0, e: 2 }, dst: { t: 12746185, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 12746185, w: 0, e: 2 }, dst: { t: 13142858, w: 0, e: 2 }, type: "Processing", o: 4, tr: "Unbounded", l: 40000 },
+{ src: { t: 13142858, w: 0, e: 2 }, dst: { t: 13149413, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 13149413, w: 0, e: 2 }, dst: { t: 13592228, w: 0, e: 2 }, type: "Processing", o: 6, tr: "Unbounded", l: 40000 },
+{ src: { t: 13592228, w: 0, e: 2 }, dst: { t: 13598762, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 13598762, w: 0, e: 2 }, dst: { t: 15254481, w: 0, e: 2 }, type: "Processing", o: 8, tr: "Unbounded", l: 40000 },
+{ src: { t: 15254481, w: 0, e: 2 }, dst: { t: 15264045, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 15264045, w: 0, e: 2 }, dst: { t: 15676874, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 15676874, w: 0, e: 2 }, dst: { t: 15697330, w: 0, e: 2 }, type: "Spinning", o: 2, tr: "Unbounded", l: 0 },
+{ src: { t: 15697330, w: 0, e: 2 }, dst: { t: 15701970, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 15701970, w: 0, e: 2 }, dst: { t: 15721650, w: 0, e: 2 }, type: "Spinning", o: 4, tr: "Unbounded", l: 0 },
+{ src: { t: 15721650, w: 0, e: 2 }, dst: { t: 15725964, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 15725964, w: 0, e: 2 }, dst: { t: 15742864, w: 0, e: 2 }, type: "Spinning", o: 6, tr: "Unbounded", l: 0 },
+{ src: { t: 15742864, w: 0, e: 2 }, dst: { t: 15746634, w: 0, e: 2 }, type: "Busy", o: 0, tr: "Unbounded", l: 0 },
+{ src: { t: 15746634, w: 0, e: 2 }, dst: { t: 15751695, w: 0, e: 2 }, type: "Spinning", o: 8, tr: "Unbounded", l: 0 },
+];
+</script>
+<style>
+  body, text {
+      font-weight: 300;
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serf;
+      font-size: 14px;
+  }
+
+  text.label {
+      font-size: 10px;
+      font-weight: 300;
+  }
+
+  #graph {
+      width: 100%;
+      height: 90%;
+  }
+</style>
+<body>
+  <p>
+    <form>
+      <input type="text" value="3" id="epoch">
+    </form>
+    <button onclick="setEpoch()">set epoch</button>
+  </p>
+</body>
+<script src="https://d3js.org/d3.v5.min.js"></script>
+
+<script type="text/javascript">
+  let types = {
+    ["Processing"]: "#0b6623",
+    ["Spinning"]: "#e48282",
+    ["ControlMessage"]: "#4b5f53",
+    ["DataMessage"]: "#971757",
+    ["Waiting"]: "#FF0000",
+    ["Busy"]: "#059dc0",
+  }
+
+  let margins = {
+    left: 50,
+    top: 20,
+    right: 50,
+    bottom: 50,
+  }
+
+  let state = {
+    filteredPag: pag,
+    lastTransform: d3.zoomIdentity,
+    x: null,
+    xAxis: null,
+    zoom: d3.zoom().scaleExtent([1, 512]).on("zoom", () => {
+      state.lastTransform = d3.event.transform;
+      update();
+    }),
+    svgParent: d3.select("body").append("svg").attr("id", "graph"),
+    svg: null,
+    svgXAxis: null,
+    activities: null,
+  }
+
+  state.svg = state.svgParent.append("g")
+  state.svgXAxis = state.svg.append("g").attr("class", "axis axis--x")
+  state.activities = state.svg.append("g")
+
+  const genTitle = d => `${d.type} ${d.o === 0 ? '' : 'Op' + d.o + ' '}${d.l > 0 ? '(' + d.l + ')' : ''}`
+
+  setEpoch()
+  d3.select(window).on('resize', update);
+
+  function setEpoch() {
+    let epoch = parseInt(document.getElementById("epoch").value);
+    state.filteredPag = pag.filter(p => p.src.e === epoch);
+
+    state.x = d3.scaleLinear().domain([state.filteredPag[0].src.t / 1000000, state.filteredPag[state.filteredPag.length-1].dst.t / 1000000]);
+    state.xAxis = d3.axisBottom(state.x);
+
+    state.activities.selectAll("line").data(state.filteredPag)
+      .enter()
+      .append('line')
+      .attr('class', 'activity')
+
+    state.activities.selectAll("line").data(state.filteredPag)
+      .exit()
+      .remove()
+
+    state.activities.selectAll("text").data(state.filteredPag)
+      .enter()
+      .append('text')
+      .attr('class', 'label')
+
+    state.activities.selectAll("text").data(state.filteredPag)
+      .exit()
+      .remove()
+
+    state.svgParent.transition()
+      .duration(50)
+      .call(state.zoom.transform, d3.zoomIdentity);
+
+    update()
+  }
+
+  function update() {
+    let width = (window.innerWidth);
+    let height = (window.innerHeight - 100);
+
+    let domain = [state.filteredPag[0].src.t / 1000000, state.filteredPag[state.filteredPag.length-1].dst.t / 1000000];
+    state.x = d3.scaleLinear().domain(domain);
+    state.x.range([margins.left, width - margins.right]);
+
+    state.svgParent.call(state.zoom);
+    let xt = state.lastTransform.rescaleX(state.x);
+
+    state.svgXAxis
+      .attr("transform", "translate(0," + (height - margins.bottom) + ")")
+      .call(state.xAxis.scale(xt));
+
+    state.activities.selectAll("line").data(state.filteredPag)
+      .attr('x1', (d) => xt(d.src.t / 1000000))
+      .attr('y1', d => 100 * (1 + d.src.w))
+      .attr('stroke', d => types[d.type])
+      .attr('stroke-width', d => d.src.w !== d.dst.w ? 1.5 : 2 )
+      .attr('x2', (d) => xt(d.dst.t / 1000000))
+      .attr('y2', d => 100 * (1 + d.dst.w))
+      .attr('stroke-opacity', d => d.src.w !== d.dst.w ? 0.3 : 1)
+      .attr('stroke-dasharray', d => (d.src.w !== d.dst.w) ? "5,5" : "5,0")
+
+    state.activities.selectAll("text").data(state.filteredPag)
+      .attr("x", d => xt((d.src.t + d.dst.t) / (2 * 1000000)) - 30)
+      .attr("y", d => (((1 + d.src.w) + (1 + d.dst.w)) / 2) * 100 - 10)
+      .attr("fill", d => types[d.type])
+      .text(genTitle)
+  }
+
+</script>
+
