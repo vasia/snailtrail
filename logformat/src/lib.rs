@@ -17,38 +17,31 @@ use std::cmp::Ordering;
 /// they might be inserted as helpers during PAG construction.
 #[derive(Primitive, Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
 pub enum ActivityType {
-    /// Input introduced to the dataflow
-    Input = 1,
-    /// Data buffered at an operator (?)
-    Buffer = 2,
-    /// Operator scheduled for work
-    Scheduling = 3,
+    /// Operator scheduled. Used as temporary state for `LogRecord`s
+    /// where it's still unclear whether they were only spinning or
+    /// also did some work
+    Scheduling = 0,
     /// Operator actually doing work
-    Processing = 4,
-    /// Barrier processing activities
-    BarrierProcessing = 5,
+    Processing = 2,
+    /// Operator scheduled, but not doing any work
+    Spinning = 1,
     /// Data serialization
-    Serialization = 6,
+    Serialization = 3,
     /// Data deserialization
-    Deserialization = 7,
-    /// Fault tolerance activities
-    FaultTolerance = 8,
+    Deserialization = 4,
     /// remote control messages, e.g. about progress
-    ControlMessage = 9,
+    ControlMessage = 5,
     /// remote data messages, e.g. moving tuples around
-    DataMessage = 10,
-    /// Unknown message, used during PAG construction
-    /// (not emitted by profiling)
-    Unknown = 11,
+    DataMessage = 6,
     /// Waiting for unblocking.
     /// In particular, operator might wait for external input.
     /// (not emitted by profiling)
-    Waiting = 12,
+    Waiting = 8,
     /// Waiting where next activity is actively prepared,
     /// e.g. in-between a ScheduleEnd and consecutive ScheduleStart.
     /// In particular, operator doesn't depend on external input.
     /// (not emitted by profiling)
-    BusyWaiting = 13,
+    Busy = 9,
 }
 
 /// What "side" of the event did we log? E.g., for
@@ -56,16 +49,14 @@ pub enum ActivityType {
 /// for messages, we might log the sender or receiver.
 #[derive(Primitive, Abomonation, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Clone, Copy)]
 pub enum EventType {
-    /// Start of an event (e.g. Scheduling)
+    /// Start of an event (e.g. ScheduleStart, Sending a Message)
     Start = 1,
-    /// End of an event (e.g. Scheduling)
+    /// End of an event (e.g. ScheduleEnd, Receiving a Message)
     End = 2,
     /// Sender end of an event (e.g. a data message)
     Sent = 3,
     /// Receiver end of an event (e.g. a data message)
     Received = 4,
-    /// Some event that doesn't make sense
-    Bogus = 5,
 }
 
 /// A worker ID
@@ -99,7 +90,6 @@ pub struct LogRecord {
     /// Describes the instrumentation point which triggered this event.
     pub activity_type: ActivityType,
     /// Identifies which end of an edge this program event belongs to.
-    /// E.g. start or end for scheduling, sent or received for communication events.
     pub event_type: EventType,
     /// Similar to `local_worker` but specifies the worker ID for the other end of a sent/received message.
     pub remote_worker: Option<Worker>,
@@ -108,7 +98,9 @@ pub struct LogRecord {
     /// Unique id for the channel in the dataflow. This only applies for some event types, e.g. data / control messages.
     pub channel_id: Option<ChannelId>,
     /// correlates remote events belonging together
-    pub correlator_id: Option<u64>
+    pub correlator_id: Option<u64>,
+    /// Number of records to detect skew
+    pub length: Option<usize>,
 }
 
 impl Ord for LogRecord {
@@ -125,10 +117,10 @@ impl PartialOrd for LogRecord {
 
 impl std::fmt::Debug for LogRecord {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "e{}@t{:?}\t(s{}@w{}) | {:?} {:?} | to {:?} | op {:?} | ch {:?} | corr {:?}\t",
+        write!(f, "e{}@t{:?}\t(s{}@w{}) | {:?} {:?} | to {:?} | op {:?} | ch {:?} | corr {:?} | cnt {:?}",
                self.epoch, self.timestamp, self.seq_no, self.local_worker,
                self.event_type, self.activity_type,
-               self.remote_worker, self.operator_id, self.channel_id, self.correlator_id)
+               self.remote_worker, self.operator_id, self.channel_id, self.correlator_id, self.length)
     }
 }
 

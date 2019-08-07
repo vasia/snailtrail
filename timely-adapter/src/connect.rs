@@ -13,6 +13,7 @@ use std::{
     path::Path,
     time::Duration,
 };
+use std::collections::HashMap;
 
 use timely::{
     communication::allocator::Generic,
@@ -21,15 +22,16 @@ use timely::{
     worker::Worker,
 };
 
+use TimelyEvent::{Messages, Operates, Channels, Progress, Schedule, Text};
+
 use logformat::pair::Pair;
 
-use TimelyEvent::{Messages, Operates, Progress, Schedule, Text};
 
 
-/// A prepared computation event: (epoch, seq_no, event)
+/// A prepared computation event: (epoch, seq_no, Option<event_length>, event)
 /// The seq_no is a worker-unique identifier of the message and given
 /// in the order the events are logged.
-pub type CompEvent = (u64, u64, (Duration, WorkerIdentifier, TimelyEvent));
+pub type CompEvent = (u64, u64, Option<usize>, (Duration, WorkerIdentifier, TimelyEvent));
 
 /// A replayer that reads data to be streamed into timely
 pub type Replayer<T, R> = EventReader<T, CompEvent, R>;
@@ -123,6 +125,12 @@ pub struct PAGLogger {
     /// Received data messages don't use up fuel to avoid separating
     /// them from the schedules event that is used to reorder them.
     fuel: usize,
+    /// Stores mapping `operator address -> channel id`
+    op_addr_to_ch: HashMap<usize, usize>,
+    /// Stores mapping `operator id -> operator addr`
+    op_id_to_op_addr: HashMap<usize, usize>,
+    /// Stores current record count for a given channel id
+    channel_records: HashMap<usize, usize>,
     /// For debugging (tracks this logger's worker index)
     worker_index: usize,
     /// For debugging (tracks per-epoch messages this pag logger received)
@@ -195,6 +203,9 @@ impl PAGLogger {
             tick_sys: true,
             max_fuel,
             fuel: max_fuel,
+            op_addr_to_ch: HashMap::new(),
+            op_id_to_op_addr: HashMap::new(),
+            channel_records: HashMap::new(),
             worker_index: worker.index(),
             overall_messages: 0,
             pag_messages: 0,
@@ -220,7 +231,7 @@ impl PAGLogger {
 
             match &x {
                 Text(_) => self.tick_epoch(),
-                Operates(_) => {
+                Operates(e) => {
                     self.pag_messages += 1;
                     self.fuel -= 1;
                     self.seq_no += 1;
@@ -229,7 +240,12 @@ impl PAGLogger {
                     // i.e., before any Text event epoch markers have been observed
                     assert!(self.next_cap.first == 1 && self.curr_cap == Default::default());
 
-                    self.buffer.push((self.curr_cap.first, self.seq_no, (Default::default(), wid, x)));
+                    self.op_id_to_op_addr.insert(e.id, *e.addr.last().expect("addr empty"));
+
+                    self.buffer.push((self.curr_cap.first, self.seq_no, None, (Default::default(), wid, x)));
+                }
+                Channels(e) => {
+                    self.op_addr_to_ch.insert(e.target.0, e.id);
                 }
                 Schedule(e) => {
                     self.pag_messages += 1;
@@ -244,7 +260,22 @@ impl PAGLogger {
                         self.advance_cap(&t);
                     }
 
-                    self.buffer.push((self.curr_cap.first, self.seq_no, (t, wid, x)));
+                    // fetch length
+                    let length = if e.start_stop == StartStop::Stop {
+                        let op_addr = self.op_id_to_op_addr.get(&e.id).expect("op id not found");
+
+                        if let Some(ch_id) = self.op_addr_to_ch.get(&op_addr) {
+                            self.channel_records.remove(&ch_id)
+                        } else {
+                            // For Inputs, we won't find a corresponding channel
+                            // (by definition, no channels end at an input)
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    self.buffer.push((self.curr_cap.first, self.seq_no, length, (t, wid, x)));
                 }
                 // Remote progress events
                 Progress(e) if e.is_send || e.source != wid => {
@@ -256,34 +287,47 @@ impl PAGLogger {
                         self.advance_cap(&t);
                     }
 
-                    self.buffer.push((self.curr_cap.first, self.seq_no, (t, wid, x)));
+                    self.buffer.push((self.curr_cap.first, self.seq_no, None, (t, wid, x)));
                 }
-                // Remote data receive events
-                Messages(e) if e.source != e.target && e.target == wid => {
-                    self.pag_messages += 1;
-                    self.seq_no += 1;
+                // Data receive events
+                Messages(e) if e.is_send == false => {
+                    assert!(e.target == wid);
+                    // A. update record counter
+                    let counter = self.channel_records.entry(e.channel).or_insert(0);
+                    *counter += e.length;
 
-                    let (last_epoch, last_seq, last_event) = self.buffer.pop()
-                        .expect("non-empty buffer required");
+                    // B. if remote message: add to pag events
+                    if e.source != e.target {
+                        self.pag_messages += 1;
+                        self.seq_no += 1;
 
-                    assert!(if let Schedule(e) = &last_event.2 {e.start_stop == StartStop::Start}
-                            else {false});
+                        // self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
 
-                    // Reposition received remote data message:
-                    // 1. push the data message with previous' seq_no
-                    self.buffer.push((self.curr_cap.first, last_seq, (t, wid, x)));
-                    // 2. push the schedule event
-                    self.buffer.push((last_epoch, self.seq_no, last_event));
+                        // TODO: reordering only works if we modify times since the replay operator will sort by time
+                        let (last_epoch, last_seq, last_length, (last_t, last_wid, last_x)) = self.buffer.pop()
+                            .expect("non-empty buffer required");
+
+                        assert!(if let Schedule(e) = &last_x {e.start_stop == StartStop::Start}
+                                else {false});
+
+                        // Reposition received remote data message:
+                        // 1. push the data message with previous' seq_no
+                        self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (last_t, wid, x)));
+                        // 2. push the schedule event
+                        self.buffer.push((last_epoch, self.seq_no, last_length, (t, last_wid, last_x)));
+                    }
                 }
                 // remote data send events
                 Messages(e) if e.source != e.target => {
+                    assert!(e.source == wid);
+
                     self.pag_messages += 1;
                     self.fuel -= 1;
                     self.seq_no += 1;
                     if self.tick_sys {
                         self.advance_cap(&t);
                     }
-                    self.buffer.push((self.curr_cap.first, self.seq_no, (t, wid, x)));
+                    self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
                 }
                 _ => {}
             }
