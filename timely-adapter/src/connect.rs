@@ -376,7 +376,6 @@ impl PAGLogger {
 
                                 // self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
 
-                                // TODO: reordering only works if we modify times since the replay operator will sort by time
                                 let (last_epoch, last_seq, last_length, (last_t, last_wid, last_x)) = self.buffer.pop()
                                     .expect("non-empty buffer required");
 
@@ -385,9 +384,9 @@ impl PAGLogger {
 
                                 // Reposition received remote data message:
                                 // 1. push the data message with previous' seq_no
-                                self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (last_t, wid, x)));
+                                self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (t, wid, x)));
                                 // 2. push the schedule event
-                                self.buffer.push((last_epoch, self.seq_no, last_length, (t, last_wid, last_x)));
+                                self.buffer.push((last_epoch, self.seq_no, last_length, (last_t, last_wid, last_x)));
                             }
                         }
                         // remote data send events

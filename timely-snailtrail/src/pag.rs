@@ -280,21 +280,31 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
         let sent = narrowed
             .filter(|x| x.event_type == EventType::Sent)
-            .map(|x| ((x.local_worker, x.correlator_id, x.channel_id), x));
+            .map(|x| ((Some(x.local_worker), x.remote_worker, x.correlator_id, x.channel_id), x));
 
         let received = narrowed
             .filter(|x| x.event_type == EventType::Received)
-            .map(|x| ((x.remote_worker.unwrap(), x.correlator_id, x.channel_id), x));
+            .map(|x| {
+                // ControlMessage sends are broadcasts; they have no receiver.
+                // x.remote_worker is None for them, so here, it has to be, too.
+                let receiver = if x.activity_type == ActivityType::ControlMessage {
+                    None
+                } else {
+                    Some(x.local_worker)
+                };
+                ((x.remote_worker, receiver, x.correlator_id, x.channel_id), x)
+            });
 
         sent.join_edges(index, &received)
-            .map(|(from, to, t)| (PagEdge {
+            .map(|(from, to, t)| {
+                (PagEdge {
                 source: PagNode::from(&from),
                 destination: PagNode::from(&to),
                 edge_type: from.activity_type,
                 operator_id: None,
                 traverse: TraversalType::Unbounded,
                 length: from.length,
-            }, t, 1))
+                }, t, 1)})
     }
 }
 
@@ -304,7 +314,7 @@ trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where D: Data + Ha
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>, D> JoinEdges<S, D>
     for Stream<S, (D, LogRecord)>
-where D: Data + Hash + Eq + Abomonation + Send + Sync
+where D: Data + Hash + Eq + Abomonation + Send + Sync + std::fmt::Debug
 {
     fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)> {
         // exchange by epoch doesn't make sense for low epoch_in_flight counts
@@ -329,8 +339,6 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync
             let mut vector1 = Vec::new();
             let mut vector2 = Vec::new();
 
-            let mut total = 0;
-
             move |input1, input2, output| {
                 let timer = std::time::Instant::now();
 
@@ -350,11 +358,6 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync
 
                         map1.entry(key).or_insert(Vec::new()).push(val1);
                     }
-
-                    if cap.time().first > 29998 {
-                        total += timer.elapsed().as_nanos();
-                        info!("w{} edges join time: {}ms (map1: {}, map2: {})", index, total / 1_000_000, map1.len(), map2.len());
-                    }
                 });
 
                 input2.for_each(|cap, data| {
@@ -373,8 +376,6 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync
                         map2.entry(key).or_insert(Vec::new()).push(val2);
                     }
                 });
-
-                total += timer.elapsed().as_nanos();
             }
         })
     }

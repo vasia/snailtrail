@@ -76,7 +76,7 @@ pub type ChannelId = u64;
 ///
 /// It is the underlying structure from which the PAG construction starts.
 /// If necessary, it can also be serialized e.g. into a `msgpack` representation.
-#[derive(Abomonation, PartialEq, Eq, Hash, Clone)]
+#[derive(Abomonation, PartialEq, Eq, Hash, Clone, Debug)]
 pub struct LogRecord {
     /// worker-unique identifier of a message, given in order the events are logged
     /// in the computation.
@@ -115,14 +115,13 @@ impl PartialOrd for LogRecord {
     }
 }
 
-impl std::fmt::Debug for LogRecord {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "e{}@t{:?}\t(s{}@w{}) | {:?} {:?} | to {:?} | op {:?} | ch {:?} | corr {:?} | cnt {:?}",
-               self.epoch, self.timestamp, self.seq_no, self.local_worker,
-               self.event_type, self.activity_type,
-               self.remote_worker, self.operator_id, self.channel_id, self.correlator_id, self.length)
-    }
-}
+// impl std::fmt::Debug for LogRecord {
+//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+//         write!(f, "{},{:?},{},{},{:?},{:?}",
+//                self.epoch, self.timestamp, self.seq_no, self.local_worker,
+//                self.event_type, self.activity_type)
+//     }
+// }
 
 
 /// This module contains a definition of a new timestamp time, a "pair" or product.
