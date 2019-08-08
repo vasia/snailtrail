@@ -14,6 +14,8 @@ use std::{
     time::Duration,
 };
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 use timely::{
     communication::allocator::Generic,
@@ -24,8 +26,10 @@ use timely::{
 
 use TimelyEvent::{Messages, Operates, Channels, Progress, Schedule, Text};
 
-use logformat::pair::Pair;
+use differential_dataflow::logging::DifferentialEvent;
+use DifferentialEvent::Merge;
 
+use logformat::pair::Pair;
 
 
 /// A prepared computation event: (epoch, seq_no, Option<event_length>, event)
@@ -38,6 +42,14 @@ pub type Replayer<T, R> = EventReader<T, CompEvent, R>;
 
 /// A ReplayWriter that writes data to be streamed into timely
 pub type ReplayWriter<T, R> = EventWriter<T, CompEvent, R>;
+
+/// Wrapper around a `Vec` of `(Duration, usize, DifferentialEvent|TimelyEvent)`
+pub enum DataflowEvents <'a> {
+    /// A `TimelyEvent` batch
+    Timely(&'a mut Vec<(Duration, usize, TimelyEvent)>),
+    /// A `DifferentialEvent` batch
+    Differential(&'a mut Vec<(Duration, usize, DifferentialEvent)>)
+}
 
 /// Types of Write a PAGLogger can attach to
 pub enum TcpStreamOrFile {
@@ -125,8 +137,10 @@ pub struct PAGLogger {
     /// Received data messages don't use up fuel to avoid separating
     /// them from the schedules event that is used to reorder them.
     fuel: usize,
-    /// Stores mapping `operator address -> channel id`
-    op_addr_to_ch: HashMap<usize, usize>,
+    /// Stores mapping `operator address (target of channel) -> vec![channel ids]`
+    op_addr_to_ch_target: HashMap<usize, Vec<usize>>,
+    /// Stores mapping `operator address (source of channel) -> channel id`
+    op_addr_to_ch_source: HashMap<usize, usize>,
     /// Stores mapping `operator id -> operator addr`
     op_id_to_op_addr: HashMap<usize, usize>,
     /// Stores current record count for a given channel id
@@ -203,7 +217,8 @@ impl PAGLogger {
             tick_sys: true,
             max_fuel,
             fuel: max_fuel,
-            op_addr_to_ch: HashMap::new(),
+            op_addr_to_ch_target: HashMap::new(),
+            op_addr_to_ch_source: HashMap::new(),
             op_id_to_op_addr: HashMap::new(),
             channel_records: HashMap::new(),
             worker_index: worker.index(),
@@ -215,125 +230,185 @@ impl PAGLogger {
     }
 
     /// Redirects all events from the `TimelyEvent` logger to self.
-    pub fn attach(mut self, worker: &Worker<Generic>) {
-        worker
-            .log_register()
-            .insert::<TimelyEvent, _>("timely", move |_time, data| {
-                self.publish_batch(data);
-            });
+    pub fn attach(self, worker: &Worker<Generic>) {
+        // if there's already a logger attached, we won't override it
+        if let Err(_) = ::std::env::var("TIMELY_WORKER_LOG_ADDR") {
+            let timely_logger = Rc::new(RefCell::new(self));
+            let differential_logger = timely_logger.clone();
+
+            // TODO: Merge events aren't guaranteed to be picked up early enough
+            // so that they're assigned to the correct SchedulesEvent.
+            // They are generated at the "right" time, but there exists a race
+            // condition due to the way we read out timely & differential events in `attach`.
+            // For this reason, we currently don't add arrangement information
+            // worker
+            //     .log_register()
+            //     .insert::<DifferentialEvent, _>("differential/arrange", move |_time, data| {
+            //         differential_logger.borrow_mut().publish_batch(DataflowEvents::Differential(data));
+            //     });
+
+            worker
+                .log_register()
+                .insert::<TimelyEvent, _>("timely", move |_time, data| {
+                    timely_logger.borrow_mut().publish_batch(DataflowEvents::Timely(data));
+                });
+        }
     }
 
 
     /// Publishes a batch of logged events and advances the capability.
-    pub fn publish_batch(&mut self, data: &mut Vec<(Duration, WorkerIdentifier, TimelyEvent)>) {
-        for (t, wid, x) in data.drain(..) {
-            self.overall_messages += 1;
+    pub fn publish_batch(&mut self, data: DataflowEvents) {
+        match data {
+            DataflowEvents::Differential(data) => {
+                for (t, _wid, x) in data.drain(..) {
+                    match &x {
+                        Merge(e) if e.complete.is_some() => {
+                            let op_addr = self.op_id_to_op_addr.get(&e.operator).expect("op id in addr not found");
+                            // we need `ch_source` here, since we're not interested in the operator id
+                            // provided by the `Batch` event, but where the batch event's records flow to
+                            // (e.g., a join operator).
+                            let ch_id = self.op_addr_to_ch_source.get(&op_addr).expect("op addr in chs not found");
 
-            match &x {
-                Text(_) => self.tick_epoch(),
-                Operates(e) => {
-                    self.pag_messages += 1;
-                    self.fuel -= 1;
-                    self.seq_no += 1;
-
-                    // all operates events should happen in the initialization epoch,
-                    // i.e., before any Text event epoch markers have been observed
-                    assert!(self.next_cap.first == 1 && self.curr_cap == Default::default());
-
-                    self.op_id_to_op_addr.insert(e.id, *e.addr.last().expect("addr empty"));
-
-                    self.buffer.push((self.curr_cap.first, self.seq_no, None, (Default::default(), wid, x)));
-                }
-                Channels(e) => {
-                    self.op_addr_to_ch.insert(e.target.0, e.id);
-                }
-                Schedule(e) => {
-                    self.pag_messages += 1;
-                    // extend buffer size by 1 to avoid breaking up repositioning of
-                    // schedule start events and consequent data messages
-                    if self.fuel > 1 || e.start_stop == StartStop::Stop {
-                        self.fuel -= 1;
-                    }
-                    self.seq_no += 1;
-
-                    if self.tick_sys {
-                        self.advance_cap(&t);
-                    }
-
-                    // fetch length
-                    let length = if e.start_stop == StartStop::Stop {
-                        let op_addr = self.op_id_to_op_addr.get(&e.id).expect("op id not found");
-
-                        if let Some(ch_id) = self.op_addr_to_ch.get(&op_addr) {
-                            self.channel_records.remove(&ch_id)
-                        } else {
-                            // For Inputs, we won't find a corresponding channel
-                            // (by definition, no channels end at an input)
-                            None
+                            let counter = self.channel_records.entry(*ch_id).or_insert(0);
+                            *counter += e.complete.unwrap();
                         }
-                    } else {
-                        None
-                    };
-
-                    self.buffer.push((self.curr_cap.first, self.seq_no, length, (t, wid, x)));
-                }
-                // Remote progress events
-                Progress(e) if e.is_send || e.source != wid => {
-                    self.pag_messages += 1;
-                    self.fuel -= 1;
-                    self.seq_no += 1;
-
-                    if self.tick_sys {
-                        self.advance_cap(&t);
-                    }
-
-                    self.buffer.push((self.curr_cap.first, self.seq_no, None, (t, wid, x)));
-                }
-                // Data receive events
-                Messages(e) if e.is_send == false => {
-                    assert!(e.target == wid);
-                    // A. update record counter
-                    let counter = self.channel_records.entry(e.channel).or_insert(0);
-                    *counter += e.length;
-
-                    // B. if remote message: add to pag events
-                    if e.source != e.target {
-                        self.pag_messages += 1;
-                        self.seq_no += 1;
-
-                        // self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
-
-                        // TODO: reordering only works if we modify times since the replay operator will sort by time
-                        let (last_epoch, last_seq, last_length, (last_t, last_wid, last_x)) = self.buffer.pop()
-                            .expect("non-empty buffer required");
-
-                        assert!(if let Schedule(e) = &last_x {e.start_stop == StartStop::Start}
-                                else {false});
-
-                        // Reposition received remote data message:
-                        // 1. push the data message with previous' seq_no
-                        self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (last_t, wid, x)));
-                        // 2. push the schedule event
-                        self.buffer.push((last_epoch, self.seq_no, last_length, (t, last_wid, last_x)));
+                        _ => {}
                     }
                 }
-                // remote data send events
-                Messages(e) if e.source != e.target => {
-                    assert!(e.source == wid);
-
-                    self.pag_messages += 1;
-                    self.fuel -= 1;
-                    self.seq_no += 1;
-                    if self.tick_sys {
-                        self.advance_cap(&t);
-                    }
-                    self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
-                }
-                _ => {}
             }
+            DataflowEvents::Timely(data) => {
+                for (t, wid, x) in data.drain(..) {
+                    self.overall_messages += 1;
 
-            if self.fuel == 0 {
-                self.flush_buffer();
+                    match &x {
+                        TimelyEvent::Operates(_) | TimelyEvent::Channels(_) |
+                        TimelyEvent::Messages(_) | TimelyEvent::Schedule(_) |
+                        TimelyEvent::Text(_) => {
+                            // println!("{:?}, {:?}: {:?}", std::time::SystemTime::now(), t, x);
+                        },
+                        _ => {}
+                    }
+
+                    match &x {
+                        Text(_) => self.tick_epoch(),
+                        Operates(e) => {
+                            self.pag_messages += 1;
+                            self.fuel -= 1;
+                            self.seq_no += 1;
+
+                            // all operates events should happen in the initialization epoch,
+                            // i.e., before any Text event epoch markers have been observed
+                            assert!(self.next_cap.first == 1 && self.curr_cap == Default::default());
+
+                            self.op_id_to_op_addr.insert(e.id, *e.addr.last().expect("addr empty"));
+
+                            self.buffer.push((self.curr_cap.first, self.seq_no, None, (Default::default(), wid, x)));
+                        }
+                        Channels(e) => {
+                            let ids = self.op_addr_to_ch_target.entry(e.target.0).or_insert(Vec::new());
+                            ids.push(e.id);
+                            self.op_addr_to_ch_source.insert(e.source.0, e.id);
+                        }
+                        Schedule(e) => {
+                            self.pag_messages += 1;
+                            // extend buffer size by 1 to avoid breaking up repositioning of
+                            // schedule start events and consequent data messages
+                            if self.fuel > 1 || e.start_stop == StartStop::Stop {
+                                self.fuel -= 1;
+                            }
+                            self.seq_no += 1;
+
+                            if self.tick_sys {
+                                self.advance_cap(&t);
+                            }
+
+                            // fetch length
+                            let length = if e.start_stop == StartStop::Stop {
+                                let op_addr = self.op_id_to_op_addr.get(&e.id).expect("op id not found");
+
+                                // TODO: refactor
+                                if let Some(ch_ids) = self.op_addr_to_ch_target.get(&op_addr) {
+                                    let mut len = 0;
+                                    for ch_id in ch_ids.iter() {
+                                        if let Some(l) = self.channel_records.remove(ch_id) {
+                                            len += l;
+                                        }
+                                    }
+                                    if len > 0 {
+                                        Some(len)
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    // For Inputs, we won't find a corresponding channel
+                                    // (by definition, no channels end at an input)
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            self.buffer.push((self.curr_cap.first, self.seq_no, length, (t, wid, x)));
+                        }
+                        // Remote progress events
+                        Progress(e) if e.is_send || e.source != wid => {
+                            self.pag_messages += 1;
+                            self.fuel -= 1;
+                            self.seq_no += 1;
+
+                            if self.tick_sys {
+                                self.advance_cap(&t);
+                            }
+
+                            self.buffer.push((self.curr_cap.first, self.seq_no, None, (t, wid, x)));
+                        }
+                        // Data receive events
+                        Messages(e) if e.is_send == false => {
+                            assert!(e.target == wid);
+                            // A. update record counter
+                            let counter = self.channel_records.entry(e.channel).or_insert(0);
+                            *counter += e.length;
+
+                            // B. if remote message: add to pag events
+                            if e.source != e.target {
+                                self.pag_messages += 1;
+                                self.seq_no += 1;
+
+                                // self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
+
+                                // TODO: reordering only works if we modify times since the replay operator will sort by time
+                                let (last_epoch, last_seq, last_length, (last_t, last_wid, last_x)) = self.buffer.pop()
+                                    .expect("non-empty buffer required");
+
+                                assert!(if let Schedule(e) = &last_x {e.start_stop == StartStop::Start}
+                                        else {false});
+
+                                // Reposition received remote data message:
+                                // 1. push the data message with previous' seq_no
+                                self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (last_t, wid, x)));
+                                // 2. push the schedule event
+                                self.buffer.push((last_epoch, self.seq_no, last_length, (t, last_wid, last_x)));
+                            }
+                        }
+                        // remote data send events
+                        Messages(e) if e.source != e.target => {
+                            assert!(e.source == wid);
+
+                            self.pag_messages += 1;
+                            self.fuel -= 1;
+                            self.seq_no += 1;
+                            if self.tick_sys {
+                                self.advance_cap(&t);
+                            }
+                            self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
+                        }
+                        _ => {}
+                    }
+
+                    if self.fuel == 0 {
+                        self.flush_buffer();
+                    }
+                }
             }
         }
     }
