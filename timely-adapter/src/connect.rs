@@ -92,12 +92,12 @@ pub struct Adapter {
 impl Adapter {
     /// Creates a `PAGLogger` instance and attaches it to the computation.
     pub fn attach(worker: &Worker<Generic>) -> Self {
-        Self::attach_configured(worker, None, None)
+        Self::attach_configured(worker, None, None, ".".to_string())
     }
 
     /// Creates a customized `PAGLogger` instance and attaches it to the computation.
-    pub fn attach_configured(worker: &Worker<Generic>, load_balance_factor: Option<usize>, max_fuel: Option<usize>) -> Self {
-        PAGLogger::create_and_attach(worker, load_balance_factor, max_fuel);
+    pub fn attach_configured(worker: &Worker<Generic>, load_balance_factor: Option<usize>, max_fuel: Option<usize>, path: String) -> Self {
+        PAGLogger::create_and_attach(worker, load_balance_factor, max_fuel, path);
         let logger = worker.log_register().get::<TimelyEvent>("timely").expect("timely logger not found");
         Adapter { logger }
     }
@@ -159,14 +159,14 @@ pub struct PAGLogger {
 
 impl PAGLogger {
     /// Convenience method to create and directly attach a `PAGLogger`
-    pub fn create_and_attach(worker: &Worker<Generic>, load_balance_factor: Option<usize>, max_fuel: Option<usize>) {
-        let pag_logger = Self::new(worker, load_balance_factor, max_fuel);
+    pub fn create_and_attach(worker: &Worker<Generic>, load_balance_factor: Option<usize>, max_fuel: Option<usize>, path: String) {
+        let pag_logger = Self::new(worker, load_balance_factor, max_fuel, path);
         pag_logger.attach(worker);
     }
 
     /// Creates a new PAGLogger. Events are logged to TCP or file.
     /// Commonly called indirectly from `create_and_attach`
-    pub fn new(worker: &Worker<Generic>, load_balance_factor: Option<usize>, max_fuel: Option<usize>) -> Self {
+    pub fn new(worker: &Worker<Generic>, load_balance_factor: Option<usize>, max_fuel: Option<usize>, path: String) -> Self {
         let load_balance_factor = if let Some(load_balance_factor) = load_balance_factor {
             load_balance_factor
         } else {
@@ -196,7 +196,7 @@ impl PAGLogger {
                 .collect::<Vec<_>>()
         } else {
             (0 .. load_balance_factor).map(|i| {
-                let name = format!("../st2/{:?}.dump", (worker.index() + i * worker.peers()));
+                let name = format!("{}/{}.dump", path, (worker.index() + i * worker.peers()));
                 info!("creating {}", name);
                 let path = Path::new(&name);
                 let file = match File::create(&path) {
@@ -418,7 +418,7 @@ impl PAGLogger {
 
         if self.epoch_count % 1 == 0 {
             if self.curr_cap.first > 0 {
-                println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.first - 1, self.elapsed.elapsed().as_nanos(), self.overall_messages, self.pag_messages);
+                // println!("{}|{}|{}|{}|{}", self.worker_index, self.curr_cap.first - 1, self.elapsed.elapsed().as_nanos(), self.overall_messages, self.pag_messages);
             }
             self.elapsed = std::time::Instant::now();
             self.overall_messages = 0;
