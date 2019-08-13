@@ -1,6 +1,6 @@
 [workspace]
 
-members = ["logformat", "timely-snailtrail", "timely-adapter", "pipe"]
+members = ["logformat", "timely-snailtrail", "timely-adapter"]
 
 [profile.release]
 debug = true
