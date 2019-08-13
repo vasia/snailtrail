@@ -234,13 +234,13 @@ impl PAGLogger {
         // if there's already a logger attached, we won't override it
         if let Err(_) = ::std::env::var("TIMELY_WORKER_LOG_ADDR") {
             let timely_logger = Rc::new(RefCell::new(self));
-            let differential_logger = timely_logger.clone();
 
             // TODO: Merge events aren't guaranteed to be picked up early enough
             // so that they're assigned to the correct SchedulesEvent.
             // They are generated at the "right" time, but there exists a race
             // condition due to the way we read out timely & differential events in `attach`.
-            // For this reason, we currently don't add arrangement information
+            // For this reason, we currently don't add arrangement information.
+            // let differential_logger = timely_logger.clone();
             // worker
             //     .log_register()
             //     .insert::<DifferentialEvent, _>("differential/arrange", move |_time, data| {
@@ -260,7 +260,7 @@ impl PAGLogger {
     pub fn publish_batch(&mut self, data: DataflowEvents) {
         match data {
             DataflowEvents::Differential(data) => {
-                for (t, _wid, x) in data.drain(..) {
+                for (_t, _wid, x) in data.drain(..) {
                     match &x {
                         Merge(e) if e.complete.is_some() => {
                             let op_addr = self.op_id_to_op_addr.get(&e.operator).expect("op id in addr not found");
