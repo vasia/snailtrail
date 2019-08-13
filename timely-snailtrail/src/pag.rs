@@ -263,7 +263,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
         let p = prev.event_type;
         let r = record.event_type;
-        let edge_type2 = match (prev.activity_type, record.activity_type) {
+        let edge_type = match (prev.activity_type, record.activity_type) {
             (ControlMessage, DataMessage) => unreachable!(),
             (DataMessage, ControlMessage) => unreachable!(),
 
@@ -276,38 +276,6 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
             _ => panic!("{:?}, {:?}", prev, record)
         };
-
-        let p = prev.activity_type;
-        let r = record.activity_type;
-        let edge_type = match (prev.event_type, record.event_type) {
-            (Start, Start) => unreachable!(),
-            (Start, End) => processing_or_spinning,
-            (Start, Sent) if r == DataMessage => Processing,
-            (Start, Received) if r == DataMessage => Processing,
-
-            (End, Start) => waiting_or_busy,
-            (End, End) => unreachable!(),
-            (End, Sent) if r == ControlMessage => waiting_or_busy,
-            (End, Received) if r == ControlMessage => waiting_or_busy,
-
-            (Sent, Start) if p == ControlMessage => waiting_or_busy,
-            (Sent, End) if p == DataMessage => Processing,
-            (Sent, Sent) if (p == DataMessage && r == DataMessage) => Processing,
-            (Sent, Sent) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
-            (Sent, Received) if (p == DataMessage && r == DataMessage) => Processing,
-            (Sent, Received) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
-
-            (Received, Start) if p == ControlMessage => waiting_or_busy,
-            (Received, End) if p == DataMessage => Processing,
-            (Received, Sent) if (p == DataMessage && r == DataMessage) => Processing,
-            (Received, Sent) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
-            (Received, Received) if (p == DataMessage && r == DataMessage) => Processing,
-            (Received, Received) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
-
-            _ => panic!("{:?}, {:?}", prev, record)
-        };
-
-        assert!(edge_type == edge_type2);
 
         let operator_id = if prev.event_type != End && record.event_type != Start {
             prev.operator_id
