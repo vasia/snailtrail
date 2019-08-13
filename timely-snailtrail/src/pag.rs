@@ -214,8 +214,8 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
                     if let Some(prev_lr) = buffer.get(&local_worker) {
                         // we've seen a lr from this local_worker before
 
-                        assert!(prev_lr.epoch == lr.epoch || lr.epoch > prev_lr.epoch,
-                                format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
+                        assert!(lr.epoch >= prev_lr.epoch, format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
+                        assert!(lr.timestamp >= prev_lr.timestamp, format!("w{}: {:?} should happen before {:?}", index, prev_lr, lr));
 
                         if prev_lr.epoch == lr.epoch {
                             // only join lrs within an epoch
@@ -236,49 +236,93 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
         // Rules for a well-formatted PAG
-        // No data messages before a SchedStart event (they are always between start and end)
-        // assert!((record.event_type != EventType::Start) || prev.activity_type != ActivityType::DataMessage);
+        // No data messages outside a Schedules event
+        assert!((record.event_type != Start) || prev.activity_type != DataMessage);
+        assert!((prev.event_type != End) || record.activity_type != DataMessage);
+        // No control messages within a Schedules event
+        assert!((record.event_type != End) || prev.activity_type != ControlMessage);
+        assert!((prev.event_type != Start) || record.activity_type != ControlMessage);
         // A message with length != None is always either a SchedEnd or a remote data recv
-        assert!(record.length.is_none() || record.activity_type == ActivityType::DataMessage || record.event_type == EventType::End);
-        assert!(prev.length.is_none() || prev.activity_type == ActivityType::DataMessage || prev.event_type == EventType::End);
+        assert!(record.length.is_none() || record.activity_type == DataMessage || record.event_type == End);
+        assert!(prev.length.is_none() || prev.activity_type == DataMessage || prev.event_type == End);
+        // local edges are local and provided in order
+        assert!(record.timestamp > prev.timestamp && record.local_worker == prev.local_worker);
 
-        let edge_type = match (prev.event_type, record.event_type, record.length) {
-            (EventType::Start, EventType::End, None) => ActivityType::Spinning,
-
-            (EventType::Start, EventType::End, Some(_)) => ActivityType::Processing,
-            (EventType::Sent, EventType::End, _) => ActivityType::Processing,
-            (EventType::Start, EventType::Sent, _) => ActivityType::Processing,
-            (EventType::Sent, EventType::Sent, _) => {
-                // println!("{:?}, {:?}", prev, record);
-                ActivityType::Processing
-            },
-
-            (EventType::End, EventType::Start, _) => ActivityType::Busy,
-            (EventType::Sent, EventType::Start, _) => ActivityType::Busy,
-            (EventType::Received, EventType::Start, _) => ActivityType::Busy,
-            (EventType::End, EventType::Sent, _) => ActivityType::Busy,
-
-            (EventType::End, EventType::Received, _) => ActivityType::Waiting,
-            (EventType::Sent, EventType::Received, _) => ActivityType::Waiting,
-            (EventType::Received, EventType::Received, _) => ActivityType::Waiting,
-
-            (_, _, _) => panic!("{:?}, {:?}", prev, record)
+        // @TODO: make configurable
+        let waiting_or_busy = if (record.timestamp.as_nanos() - prev.timestamp.as_nanos()) > 15_000 {
+            Waiting
+        } else {
+            Busy
         };
 
-        let operator_id = if prev.event_type != EventType::End && record.event_type != EventType::Start {
+        let processing_or_spinning = if record.length.is_some() {
+            Processing
+        } else {
+            Spinning
+        };
+
+        let p = prev.event_type;
+        let r = record.event_type;
+        let edge_type2 = match (prev.activity_type, record.activity_type) {
+            (ControlMessage, DataMessage) => unreachable!(),
+            (DataMessage, ControlMessage) => unreachable!(),
+
+            (Scheduling, Scheduling) if (p == Start && r == End) => processing_or_spinning,
+            (Scheduling, Scheduling) if (p == End && r == Start) => waiting_or_busy,
+            (ControlMessage, _) => waiting_or_busy,
+            (_, ControlMessage) => waiting_or_busy,
+            (DataMessage, _) => Processing,
+            (_, DataMessage) => Processing,
+
+            _ => panic!("{:?}, {:?}", prev, record)
+        };
+
+        let p = prev.activity_type;
+        let r = record.activity_type;
+        let edge_type = match (prev.event_type, record.event_type) {
+            (Start, Start) => unreachable!(),
+            (Start, End) => processing_or_spinning,
+            (Start, Sent) if r == DataMessage => Processing,
+            (Start, Received) if r == DataMessage => Processing,
+
+            (End, Start) => waiting_or_busy,
+            (End, End) => unreachable!(),
+            (End, Sent) if r == ControlMessage => waiting_or_busy,
+            (End, Received) if r == ControlMessage => waiting_or_busy,
+
+            (Sent, Start) if p == ControlMessage => waiting_or_busy,
+            (Sent, End) if p == DataMessage => Processing,
+            (Sent, Sent) if (p == DataMessage && r == DataMessage) => Processing,
+            (Sent, Sent) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
+            (Sent, Received) if (p == DataMessage && r == DataMessage) => Processing,
+            (Sent, Received) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
+
+            (Received, Start) if p == ControlMessage => waiting_or_busy,
+            (Received, End) if p == DataMessage => Processing,
+            (Received, Sent) if (p == DataMessage && r == DataMessage) => Processing,
+            (Received, Sent) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
+            (Received, Received) if (p == DataMessage && r == DataMessage) => Processing,
+            (Received, Received) if (p == ControlMessage && r == ControlMessage) => waiting_or_busy,
+
+            _ => panic!("{:?}, {:?}", prev, record)
+        };
+
+        assert!(edge_type == edge_type2);
+
+        let operator_id = if prev.event_type != End && record.event_type != Start {
             prev.operator_id
         } else {
             None
         };
 
-        let traverse = if edge_type == ActivityType::Waiting {
+        let traverse = if edge_type == Waiting {
             TraversalType::Block
         } else {
             TraversalType::Unbounded
         };
 
         // only keep lengths for schedule edges
-        let length = if record.activity_type == ActivityType::Scheduling {
+        let length = if record.activity_type == Scheduling {
             record.length
         } else {
             None
@@ -295,18 +339,18 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
     }
 
     fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
-        let narrowed = self.filter(|x| x.activity_type == ActivityType::ControlMessage || x.activity_type == ActivityType::DataMessage);
+        let narrowed = self.filter(|x| x.activity_type == ControlMessage || x.activity_type == DataMessage);
 
         let sent = narrowed
-            .filter(|x| x.event_type == EventType::Sent)
+            .filter(|x| x.event_type == Sent)
             .map(|x| ((Some(x.local_worker), x.remote_worker, x.correlator_id, x.channel_id), x));
 
         let received = narrowed
-            .filter(|x| x.event_type == EventType::Received)
+            .filter(|x| x.event_type == Received)
             .map(|x| {
                 // ControlMessage sends are broadcasts; they have no receiver.
                 // x.remote_worker is None for them, so here, it has to be, too.
-                let receiver = if x.activity_type == ActivityType::ControlMessage {
+                let receiver = if x.activity_type == ControlMessage {
                     None
                 } else {
                     Some(x.local_worker)
@@ -316,6 +360,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
         sent.join_edges(index, &received)
             .map(|(from, to, t)| {
+                assert!(to.local_worker != from.local_worker);
                 (PagEdge {
                 source: PagNode::from(&from),
                 destination: PagNode::from(&to),
