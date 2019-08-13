@@ -1,7 +1,4 @@
-#[macro_use]
-extern crate log;
-
-use timely_snailtrail::pag;
+use crate::pag;
 
 use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
@@ -14,8 +11,6 @@ use timely::dataflow::Stream;
 use timely::Data;
 
 use std::time::Duration;
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
 use std::time::Instant;
 
 use logformat::pair::Pair;
@@ -23,39 +18,14 @@ use logformat::pair::Pair;
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
 
-fn main() {
-    env_logger::init();
+use crate::STError;
 
-    let mut args = std::env::args();
+/// Inspects a running SnailTrail computation, e.g. for benchmarking of SnailTrail itself.
+pub fn run(
+    timely_configuration: timely::Configuration,
+    replay_source: ReplaySource) -> Result<(), STError> {
 
-    info!("CLAs: {:?}", args);
-    let _ = args.next(); // bin name
-    let source_peers = args.next().unwrap().parse::<usize>().unwrap();
-    let throttle = 1;
-    // let throttle = args.next().unwrap().parse::<u64>().unwrap();
-    let online = if args.next().unwrap().parse::<bool>().unwrap() {
-        Some((args.next().unwrap().parse::<String>().unwrap(), std::env::args().nth(5).unwrap().parse::<u16>().unwrap()))
-    } else {
-        None
-    };
-    let _ = args.next(); // --
-
-    let args = args.collect::<Vec<_>>();
-
-    // creates one socket per worker in the computation we're examining
-    let replay_source = if let Some((ip, port)) = &online {
-        let sockets = connect::open_sockets(ip.parse().expect("couldn't parse IP"), *port, source_peers).expect("couldn't open sockets");
-        ReplaySource::Tcp(Arc::new(Mutex::new(sockets)))
-    } else {
-        let files = (0 .. source_peers)
-            .map(|idx| format!("{}.dump", idx))
-            .map(|path| Some(PathBuf::from(path)))
-            .collect::<Vec<_>>();
-
-        ReplaySource::Files(Arc::new(Mutex::new(files)))
-    };
-
-    timely::execute_from_args(args.clone().into_iter(), move |worker| {
+    timely::execute(timely_configuration, move |worker| {
         let index = worker.index();
 
         // read replayers from file (offline) or TCP stream (online)
@@ -63,8 +33,17 @@ fn main() {
             connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
-            pag::create_pag(scope, readers, index, throttle)
-                .bench(index)
+            // use timely::dataflow::operators::inspect::Inspect;
+            // use timely_adapter::replay_throttled::ReplayThrottled;
+            // use timely_adapter::ConstructLRs;
+            // readers
+            //     .replay_throttled_into(index, scope, None, throttle)
+            //     .peel_ops(index)
+            //     .inspect(|x| println!("{:?}", x))
+            //     .probe()
+
+            pag::create_pag(scope, readers, index, 1)
+                // .bench(index)
                 .probe()
         });
 
@@ -76,7 +55,9 @@ fn main() {
         // use std::io::stdin;
         // stdin().read_line(&mut String::new()).unwrap();
     })
-    .unwrap();
+        .map_err(|x| STError(format!("error in the timely computation: {}", x)))?;
+
+    Ok(())
 }
 
 

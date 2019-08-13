@@ -20,136 +20,28 @@ pub mod algo;
 /// Contains the PAG construction
 pub mod pag;
 
-// /// Elements of a complete activity graph, including ingress/egress points
-// #[derive(Abomonation, Clone, Debug, Eq, Hash, PartialEq)]
-// pub enum PagOutput {
-//     /// Entry point into the graph
-//     StartNode(PagNode),
-//     /// Exit point from the graph
-//     EndNode(PagNode),
-//     /// Graph edges
-//     Edge(PagEdge),
-// }
+/// Contains commands to execute SnailTrail
+pub mod commands;
 
-// impl SrcDst<PagNode> for PagOutput {
-//     fn src(&self) -> Option<PagNode> {
-//         match *self {
-//             PagOutput::StartNode(_) => None,
-//             PagOutput::EndNode(ref n) => Some(*n),
-//             PagOutput::Edge(ref e) => Some(e.source),
-//         }
-//     }
 
-//     fn dst(&self) -> Option<PagNode> {
-//         match *self {
-//             PagOutput::StartNode(ref n) => Some(*n),
-//             PagOutput::EndNode(_) => None,
-//             PagOutput::Edge(ref e) => Some(e.destination),
-//         }
-//     }
-// }
+/// A generic SnailTrail error
+pub struct STError(pub String);
 
-// impl PagEdge {
-//     pub fn weight(&self) -> u64 {
-//         if self.destination.timestamp > self.source.timestamp {
-//             (self.destination.timestamp - self.source.timestamp).as_nanos() as u64
-//         } else {
-//             (self.source.timestamp - self.destination.timestamp).as_nanos() as u64
-//         }
-//     }
+impl From<std::io::Error> for STError {
+    fn from(error: std::io::Error) -> Self {
+        STError(format!("io error: {}", error.to_string()))
+    }
+}
 
-//     pub fn is_message(&self) -> bool {
-//         self.source.worker_id != self.destination.worker_id
-//     }
-// }
+impl From<tdiag_connect::ConnectError> for STError {
+    fn from(error: tdiag_connect::ConnectError) -> Self {
+        match error {
+            tdiag_connect::ConnectError::IoError(e) => STError(format!("io error: {}", e)),
+            tdiag_connect::ConnectError::Other(e) => STError(e),
+        }
+    }
+}
 
-// impl PagOutput {
-//     pub fn weight(&self) -> u64 {
-//         match *self {
-//             PagOutput::Edge(ref e) => e.weight(),
-//             _ => 0,
-//         }
-//     }
-
-//     pub fn destination(&self) -> &PagNode {
-//         match *self {
-//             PagOutput::Edge(ref e) => &e.destination,
-//             PagOutput::StartNode(ref e) |
-//             PagOutput::EndNode(ref e) => e,
-//         }
-//     }
-
-//     pub fn destination_worker(&self) -> Worker {
-//         match *self {
-//             PagOutput::Edge(ref e) => e.destination.worker_id,
-//             PagOutput::StartNode(ref e) |
-//             PagOutput::EndNode(ref e) => e.worker_id,
-//         }
-//     }
-
-//     pub fn source_timestamp(&self) -> logformat::Timestamp {
-//         match *self {
-//             PagOutput::Edge(ref e) => e.source.timestamp,
-//             PagOutput::StartNode(ref e) |
-//             PagOutput::EndNode(ref e) => e.timestamp,
-//         }
-//     }
-
-//     pub fn destination_timestamp(&self) -> logformat::Timestamp {
-//         match *self {
-//             PagOutput::Edge(ref e) => e.destination.timestamp,
-//             PagOutput::StartNode(ref e) |
-//             PagOutput::EndNode(ref e) => e.timestamp,
-//         }
-//     }
-
-//     pub fn is_message(&self) -> bool {
-//         match *self {
-//             PagOutput::Edge(ref e) => e.is_message(),
-//             PagOutput::StartNode(_) |
-//             PagOutput::EndNode(_) => false,
-//         }
-//     }
-// }
-
-// Used internal to this module during PAG construction.  We need a single stream containing all
-// a worker's activity and an indication of whether it was entirely local or involved a remote
-// worker.
-// #[derive(Abomonation, Clone, Debug)]
-// enum Timeline {
-//     Local(PagEdge), // full-edge: computation
-//     Remote(LogRecord), // half-edge: communication
-// }
-
-// impl Timeline {
-//     fn get_start_timestamp(&self) -> Duration {
-//         match *self {
-//             Timeline::Local(ref edge) => edge.source.timestamp,
-//             Timeline::Remote(ref rec) => rec.timestamp,
-//         }
-//     }
-
-//     fn get_end_timestamp(&self) -> Duration {
-//         match *self {
-//             Timeline::Local(ref edge) => edge.destination.timestamp,
-//             Timeline::Remote(ref rec) => rec.timestamp,
-//         }
-//     }
-
-//     fn get_worker_id(&self) -> Worker {
-//         match *self {
-//             Timeline::Local(ref edge) => edge.source.worker_id,
-//             Timeline::Remote(ref rec) => rec.local_worker,
-//         }
-//     }
-
-//     fn get_sort_key(&self) -> (logformat::Timestamp, logformat::Timestamp) {
-//         match *self {
-//             Timeline::Local(ref edge) => (edge.source.timestamp, edge.destination.timestamp),
-//             Timeline::Remote(ref rec) => (rec.timestamp, Duration::new(0, 0)),
-//         }
-//     }
-// }
 
 // /// Collects all data within a single epoch and applies user-defined logic.
 // /// (A fusion of the `Accumulate` and `Map` operators but the logic is
