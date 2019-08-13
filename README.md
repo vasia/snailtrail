@@ -2,21 +2,21 @@
   <img src="https://github.com/li1/snailtrail/raw/master/snail.png" width="250">
 </p>
 
-# SnailTrail
+# SnailTrail 2 (ST2)
 
-This is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a tool to run online critical path analysis on various stream processors (see also the [SnailTrail NSDI'18 Paper](https://doi.org/10.3929/ethz-b-000228581)).
+SnailTrail 2 (ST2 for short) is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a tool to run online critical path analysis on various stream processors (see also the [SnailTrail NSDI'18 Paper](https://doi.org/10.3929/ethz-b-000228581)).
 
 The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.10 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow) and won't refrain from breaking existing upstream abstractions (even though they should be relatively easy to add back in at a later point in time).
 
 ## Naming conventions
 
-Similar to [Timely Diagnostics](https://github.com/timelydataflow/diagnostics), we will refer to the dataflow that is being analysed as the _source computation_. The workers of the dataflow that is being analysed are the _source peers_, while we unsurprisingly refer to Snailtrail's workers as _SnailTrail peers_.
+Similar to [Timely Diagnostics](https://github.com/timelydataflow/diagnostics), we will refer to the dataflow that is being analysed as the _source computation_. The workers of the dataflow that is being analysed are the _source peers_, while we unsurprisingly refer to ST2's workers as _ST2 peers_.
 
 ## Getting Started 
 
-### 1. Attach SnailTrail to a source computation with `timely-adapter`
+### 1. Attach ST2 to a source computation with `timely-adapter`
 
-Attach SnailTrail at `(A)` and `(B)` to any source computation (the example can be found at `timely-adapter/examples/minimal.rs`):
+Attach ST2 at `(A)` and `(B)` to any source computation (the example can be found at `timely-adapter/examples/minimal.rs`):
 
 ```rust
 use timely_adapter::connect::Adapter;
@@ -47,16 +47,16 @@ fn main() {
 }
 ```
 
-**Make sure to place the adapter at the top of the timely closure.** Otherwise, some logging events might not get picked up correctly by SnailTrail.
+**Make sure to place the adapter at the top of the timely closure.** Otherwise, some logging events might not get picked up correctly by ST2.
 
-### 2. Install the SnailTrail CLI (`timely-snailtrail`)
+### 2. Install the ST2 CLI (`timely-snailtrail`)
 
 1. Run `cargo install --path timely-snailtrail timely-snailtrail` from the project root.
 2. Explore the CLI: `timely-snailtrail --help`
 
 ### 3. Inspect your computation
 
-For example, we might want to generate aggregate metrics for an online 2 worker source computation using 2 SnailTrail peers:
+For example, we might want to generate aggregate metrics for an online 2 worker source computation using 2 ST2 peers:
 
 1. Run `timely-snailtrail -i 127.0.0.1 -p 1234 -s 2 -w 2 -o metrics.csv`.
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR="127.0.0.1:1234"` as env variable.
@@ -72,17 +72,17 @@ For example, we might want to generate aggregate metrics for an online 2 worker 
 ### Differences
 
 1. In offline mode, the source computation is executed as usual — in online mode, you pass `SNAILTRAIL_ADDR=<IP>:<port>` as environment variable.
-2. In offline mode, you start the source computation first, then SnailTrail — vice versa in online mode.
+2. In offline mode, you start the source computation first, then ST2 — vice versa in online mode.
 3. In offline mode, you pass `-f <path/to/dumps>` as CLA — in online mode, you pass `-i <IP>` and `-p <port>`.
 
 ### Usage example
 
 #### Offline
 1. Run the source computation. This will generate `*.dump` files.
-2. Analyze the generated offline trace with SnailTrail: `timely-snailtrail -f <path/to/dumps> -s <source peers> <subcommand>`
+2. Analyze the generated offline trace with ST2: `timely-snailtrail -f <path/to/dumps> -s <source peers> <subcommand>`
   
 #### Online:
-1. Run SnailTrail: `timely-snailtrail -i <IP> -p <port> -s <source peers> <subcommand>`
+1. Run ST2: `timely-snailtrail -i <IP> -p <port> -s <source peers> <subcommand>`
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR=<IP>:<port>` set as env variable.
 
 ## Examples
