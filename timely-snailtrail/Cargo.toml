@@ -1,6 +1,12 @@
 [package]
 name = "timely-snailtrail"
 version = "0.1.0"
+authors = ["Malte Sandstede <malte@sandstede.com>"]
+homepage = "https://github.com/li1/SnailTrail"
+repository = "https://github.com/li1/snailtrail.git"
+description = "SnailTrail for Timely & Differential"
+license = "MIT"
+
 edition = "2018"
 
 [dependencies]
@@ -9,10 +15,9 @@ abomonation_derive = "0.3"
 log = "^0.4.0"
 itertools = "^0.8"
 logformat = { version = "0.2.0", path = "../logformat" }
-timely-adapter = { version = "0.2.0", path = "../timely-adapter/" }
+timely-adapter = { version = "0.1.0", path = "../timely-adapter/" }
 timely = "0.10.0"
 differential-dataflow = "0.10.0"
 tdiag-connect = "0.2.0"
-
-[dev-dependencies]
+clap = "2.33.0"
 env_logger = "^0.6.1"

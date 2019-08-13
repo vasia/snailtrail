@@ -1,8 +1,11 @@
 [package]
 name = "logformat"
 version = "0.2.0"
-edition = "2018"
 description = "definitions for data types used to serialize raw traces"
+homepage = "https://github.com/li1/SnailTrail"
+repository = "https://github.com/li1/snailtrail.git"
+
+edition = "2018"
 
 [dependencies]
 rmp = "^0.8"
@@ -14,4 +17,3 @@ json = "0.11.12"
 clap = "^2.32"
 timely = "0.10.0"
 differential-dataflow = "0.10.0"
-

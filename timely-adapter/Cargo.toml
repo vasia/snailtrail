@@ -1,7 +1,12 @@
 [package]
 name = "timely-adapter"
-version = "0.2.0"
-authors = ["Malte Sandstede <samalt@ethz.ch>"]
+version = "0.1.0"
+authors = ["Malte Sandstede <malte@sandstede.com>"]
+homepage = "https://github.com/li1/SnailTrail"
+repository = "https://github.com/li1/snailtrail.git"
+description = "SnailTrail Adapter for Timely & Differential"
+license = "MIT"
+
 edition = "2018"
 
 [dependencies]
