@@ -196,7 +196,7 @@ impl PAGLogger {
                 .collect::<Vec<_>>()
         } else {
             (0 .. load_balance_factor).map(|i| {
-                let name = format!("../timely-snailtrail/{:?}.dump", (worker.index() + i * worker.peers()));
+                let name = format!("../st2/{:?}.dump", (worker.index() + i * worker.peers()));
                 info!("creating {}", name);
                 let path = Path::new(&name);
                 let file = match File::create(&path) {

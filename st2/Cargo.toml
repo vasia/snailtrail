@@ -1,5 +1,5 @@
 [package]
-name = "timely-snailtrail"
+name = "st2"
 version = "0.1.0"
 authors = ["Malte Sandstede <malte@sandstede.com>"]
 homepage = "https://github.com/li1/SnailTrail"
