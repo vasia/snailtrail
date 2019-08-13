@@ -1,6 +1,5 @@
 use timely::dataflow::operators::{capture::{event::Event, Capture, extract::Extract}};
 use timely::dataflow::operators::map::Map;
-use timely::dataflow::operators::capture::EventReader;
 use timely::communication::initialize::WorkerGuards;
 
 use crate::pag;
@@ -63,8 +62,7 @@ fn prep_pag(timely_configuration: timely::Configuration,
         let pag_send: mpsc::Sender<_> = pag_send.lock().expect("cannot lock pag_send").clone();
 
         // read replayers from file (offline) or TCP stream (online)
-        let readers: Vec<EventReader<_, timely_adapter::connect::CompEvent, _>> =
-            connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
+        let readers = connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
         worker.dataflow(|scope| {
             pag::create_pag(scope, readers, index, 1)

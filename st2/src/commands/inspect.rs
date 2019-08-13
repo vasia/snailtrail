@@ -2,7 +2,6 @@ use crate::pag;
 
 use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
-use timely::dataflow::operators::capture::EventReader;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::operators::generic::operator::Operator;
@@ -29,8 +28,7 @@ pub fn run(
         let index = worker.index();
 
         // read replayers from file (offline) or TCP stream (online)
-        let readers: Vec<EventReader<_, timely_adapter::connect::CompEvent, _>> =
-            connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
+        let readers = connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
         let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
             // use timely::dataflow::operators::inspect::Inspect;
