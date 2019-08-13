@@ -102,24 +102,13 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> Metrics<S> for Stream<S, (PagEdg
         }
 
         self
-            // .filter(|(edge, _t, _diff)| edge.source.worker_id == edge.destination.worker_id)
             .delay_batch(|time| Pair::new(time.first + 1, Default::default()))
             .map(|(edge, _t, _diff)| ((edge.source.worker_id, edge.destination.worker_id, edge.edge_type), edge))
             .aggregate::<_,(u64, u128, u64),_,_,_>(
                 |_key, edge, acc| {
-                    // @TODO: Due to clock skew, this is sometimes < 0
-                    let dst_ts = edge.destination.timestamp.as_nanos();
-                    let src_ts = edge.source.timestamp.as_nanos();
-
-                    let duration = if src_ts > dst_ts {
-                        0
-                    } else {
-                        dst_ts - src_ts
-                    };
-
-                    let processed = edge.length.unwrap_or(0) as u64;
-
-                    *acc = (acc.0 + 1, acc.1 + duration, acc.2 + processed);
+                    *acc = (acc.0 + 1,
+                            acc.1 + edge.duration(),
+                            acc.2 + edge.length.unwrap_or(0) as u64);
                 },
                 |key, acc| (key.0, key.1, key.2, acc.0, acc.1, acc.2),
                 |key| calculate_hash(key))

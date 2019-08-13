@@ -17,6 +17,8 @@ use timely::dataflow::operators::concat::Concat;
 use timely::Data;
 
 use logformat::{ActivityType, EventType, LogRecord, OperatorId};
+use ActivityType::{Busy, Waiting, Scheduling, Processing, Spinning, ControlMessage, DataMessage};
+use EventType::{Sent, Received, Start, End};
 use logformat::pair::Pair;
 use timely_adapter::{connect::Replayer, create_lrs};
 
@@ -93,6 +95,23 @@ pub struct PagEdge {
     pub traverse: TraversalType,
     /// record count
     pub length: Option<usize>,
+}
+
+impl PagEdge {
+    /// PagEdge's duration in ns.
+    /// Due to clock skew, we can't give guarantees that `to.timestamp > from.timestamp`.
+    /// We report a duration of 0 in the case that `to.timestamp < from.timestamp`.
+    pub fn duration(&self) -> u128 {
+        // @TODO: Due to clock skew, this is sometimes < 0
+        let dst_ts = self.destination.timestamp.as_nanos();
+        let src_ts = self.source.timestamp.as_nanos();
+
+        if src_ts > dst_ts {
+            0
+        } else {
+            dst_ts - src_ts
+        }
+    }
 }
 
 impl Ord for PagEdge {
