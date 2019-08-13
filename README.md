@@ -69,22 +69,25 @@ For example, we might want to generate aggregate metrics for an online 2 worker 
 
 ## Online vs. Offline
 
-There are three differences between running online and offline:
+### Differences
+
 1. In offline mode, the source computation is executed as usual — in online mode, you pass `SNAILTRAIL_ADDR=<IP>:<port>` as environment variable.
 2. In offline mode, you start the source computation first, then SnailTrail — vice versa in online mode.
 3. In offline mode, you pass `-f <path/to/dumps>` as CLA — in online mode, you pass `-i <IP>` and `-p <port>`.
 
-For example:
+### Usage example
 
-In offline mode, 
+#### Offline
 1. Run the source computation. This will generate `*.dump` files.
 2. Analyze the generated offline trace with SnailTrail: `timely-snailtrail -f <path/to/dumps> -s <source peers> <subcommand>`
   
-In online mode,
+#### Online:
 1. Run SnailTrail: `timely-snailtrail -i <IP> -p <port> -s <source peers> <subcommand>`
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR=<IP>:<port>` set as env variable.
 
 ## Examples
+
+### Source Computations
 
 Visit `timely-adapter/examples` for source computation examples.
 
