@@ -2,7 +2,7 @@ use timely_adapter::{
     connect::{make_replayers, open_sockets},
     make_log_records,
 };
-use timely_snailtrail::{pag, Config};
+use st2::{pag, Config};
 
 use timely::dataflow::{
     operators::{capture::replay::Replay, probe::Probe},

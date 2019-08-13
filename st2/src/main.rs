@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
 
-use timely_snailtrail::STError;
+use st2::STError;
 
 fn main() {
     env_logger::init();
@@ -104,7 +104,7 @@ fn run() -> Result<(), STError> {
             let replay_source = make_replay_source(&args)?;
             println!("Connected!");
 
-            timely_snailtrail::commands::viz::run(timely_configuration, replay_source, output_path)
+            st2::commands::viz::run(timely_configuration, replay_source, output_path)
         }
         ("metrics", Some(metrics_args)) => {
             let output_path = std::path::Path::new(metrics_args.value_of("output_path").expect("error parsing args"));
@@ -112,13 +112,13 @@ fn run() -> Result<(), STError> {
             let replay_source = make_replay_source(&args)?;
             println!("Connected!");
 
-            timely_snailtrail::commands::metrics::run(timely_configuration, replay_source, output_path)
+            st2::commands::metrics::run(timely_configuration, replay_source, output_path)
         }
         ("inspect", Some(_inspect_args)) => {
             let replay_source = make_replay_source(&args)?;
             println!("Connected!");
 
-            timely_snailtrail::commands::inspect::run(timely_configuration, replay_source)
+            st2::commands::inspect::run(timely_configuration, replay_source)
         }
         _ => panic!("Invalid subcommand"),
     }

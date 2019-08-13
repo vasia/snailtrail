@@ -12,7 +12,7 @@ The fork builds upon the original repository and implements further algorithms f
 
 Similar to [Timely Diagnostics](https://github.com/timelydataflow/diagnostics), we will refer to the dataflow that is being analysed as the _source computation_. The workers of the dataflow that is being analysed are the _source peers_, while we unsurprisingly refer to ST2's workers as _ST2 peers_.
 
-## Getting Started 
+## Getting Started
 
 ### 1. Attach ST2 to a source computation with `timely-adapter`
 
@@ -49,23 +49,23 @@ fn main() {
 
 **Make sure to place the adapter at the top of the timely closure.** Otherwise, some logging events might not get picked up correctly by ST2.
 
-### 2. Install the ST2 CLI (`timely-snailtrail`)
+### 2. Install the ST2 CLI (`st2`)
 
-1. Run `cargo install --path timely-snailtrail timely-snailtrail` from the project root.
-2. Explore the CLI: `timely-snailtrail --help`
+1. Run `cargo install --path st2 st2` from the project root.
+2. Explore the CLI: `st2 --help`
 
 ### 3. Inspect your computation
 
 For example, we might want to generate aggregate metrics for an online 2 worker source computation using 2 ST2 peers:
 
-1. Run `timely-snailtrail -i 127.0.0.1 -p 1234 -s 2 -w 2 -o metrics.csv`.
+1. Run `st2 -i 127.0.0.1 -p 1234 -s 2 -w 2 -o metrics.csv`.
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR="127.0.0.1:1234"` as env variable.
 3. See `metrics.csv` for the aggregate metrics.
 
 ## Commands
 
-- `viz` creates an interactive HTML-based PAG visualization (cf. `docs/graphs` for examples). Try it out: `timely-snailtrail -f <path/to/dumps> -s <source peers> viz` -> check `graph.html`
-- `metrics` exports aggregate metrics for the source computation (cf. `docs/metrics` for examples). Try it out: `timely-snailtrail -f <path/to/dumps> -s <source peers> metrics` -> check `metrics.csv`
+- `viz` creates an interactive HTML-based PAG visualization (cf. `docs/graphs` for examples). Try it out: `st2 -f <path/to/dumps> -s <source peers> viz` -> check `graph.html`
+- `metrics` exports aggregate metrics for the source computation (cf. `docs/metrics` for examples). Try it out: `st2 -f <path/to/dumps> -s <source peers> metrics` -> check `metrics.csv`
 
 ## Online vs. Offline
 
@@ -79,10 +79,10 @@ For example, we might want to generate aggregate metrics for an online 2 worker 
 
 #### Offline
 1. Run the source computation. This will generate `*.dump` files.
-2. Analyze the generated offline trace with ST2: `timely-snailtrail -f <path/to/dumps> -s <source peers> <subcommand>`
-  
+2. Analyze the generated offline trace with ST2: `st2 -f <path/to/dumps> -s <source peers> <subcommand>`
+
 #### Online:
-1. Run ST2: `timely-snailtrail -i <IP> -p <port> -s <source peers> <subcommand>`
+1. Run ST2: `st2 -i <IP> -p <port> -s <source peers> <subcommand>`
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR=<IP>:<port>` set as env variable.
 
 ## Examples
@@ -98,7 +98,7 @@ Check out the `Structure` section of this `README` for a high-level overview.
 The "magic" mostly happens at
 - `timely-adapter/src/connect.rs` for logging a computation
 - `timely-adapter/src/lib.rs` for the `LogRecord` creation,
-- `timely-snailtrail/src/pag.rs` for the `PAG` creation, and the
+- `st2/src/pag.rs` for the `PAG` creation, and the
 - `inspect.rs` command, `triangles.rs` source computation, and `minimal.rs` source computation tying it all together.
 
 ## Structure
@@ -113,7 +113,7 @@ The "magic" mostly happens at
 | --------- | -------- | ----------- |
 | adapter | `timely-adapter` | timely / differential 0.9 adapter |
 | infrastructure | `logformat` | Shared definitions of core data types and serialization of traces. |
-| infrastructure, algorithms | `timely-snailtrail` | PAG generation & algorithms for timely 0.9 with epochal semantics. |
+| infrastructure, algorithms | `st2` | PAG generation & algorithms for timely 0.9 with epochal semantics. |
 
 #### Upstream
 
