@@ -8,11 +8,15 @@ This is a fork of [SnailTrail](https://github.com/strymon-system/snailtrail), a 
 
 The fork builds upon the original repository and implements further algorithms for analyzing stream processors. It currently focuses on the 0.10 version of [Timely Dataflow and Differential Dataflow](https://github.com/timelydataflow) and won't refrain from breaking existing upstream abstractions (even though they should be relatively easy to add back in at a later point in time).
 
+## Naming conventions
+
+Similar to [Timely Diagnostics](https://github.com/timelydataflow/diagnostics), we will refer to the dataflow that is being analysed as the _source computation_. The workers of the dataflow that is being analysed are the _source peers_, while we unsurprisingly refer to Snailtrail's workers as _SnailTrail peers_.
+
 ## Getting Started 
 
-### 1. Attach SnailTrail to a source computation via `timely-adapter`
+### 1. Attach SnailTrail to a source computation with `timely-adapter`
 
-Use `timely-adapter/examples/minimal.rs` as a starting point:
+Attach SnailTrail at `(A)` and `(B)` to any source computation (the example can be found at `timely-adapter/examples/minimal.rs`):
 
 ```rust
 use timely_adapter::connect::Adapter;
@@ -43,22 +47,46 @@ fn main() {
 }
 ```
 
-**Make sure to place the adapter at the top of the timely closure.**
+**Make sure to place the adapter at the top of the timely closure.** Otherwise, some logging events might not get picked up correctly by SnailTrail.
 
-### 2. Run in offline mode
+### 2. Install the SnailTrail CLI (`timely-snailtrail`)
 
-1. Run the source computation as you would normally.
-2. To analyze the generated offline trace with SnailTrail, from `timely-snailtrail`, run `cargo run --example inspect <# source computation peers> false`.
+1. Run `cargo install --path timely-snailtrail timely-snailtrail` from the project root.
+2. Explore the CLI: `timely-snailtrail --help`
 
-### 3. Run in online mode
+### 3. Inspect your computation
 
-1. From `timely-snailtrail`, run `cargo run --example inspect <# source computation peers> true <IP> <PORT>`.
-2. Attach the source computation by running it with `SNAILTRAIL_ADDR=<IP>:<PORT>` set as env variable.
+For example, we might want to generate aggregate metrics for an online 2 worker source computation using 2 SnailTrail peers:
+
+1. Run `timely-snailtrail -i 127.0.0.1 -p 1234 -s 2 -w 2 -o metrics.csv`.
+2. Attach the source computation by running it with `SNAILTRAIL_ADDR="127.0.0.1:1234"` as env variable.
+3. See `metrics.csv` for the aggregate metrics.
+
+## Commands
+
+- `viz` creates an interactive HTML-based PAG visualization (cf. `docs/graphs` for examples). Try it out: `timely-snailtrail -f <path/to/dumps> -s <source peers> viz` -> check `graph.html`
+- `metrics` exports aggregate metrics for the source computation (cf. `docs/metrics` for examples). Try it out: `timely-snailtrail -f <path/to/dumps> -s <source peers> metrics` -> check `metrics.csv`
+
+## Online vs. Offline
+
+There are three differences between running online and offline:
+1. In offline mode, the source computation is executed as usual — in online mode, you pass `SNAILTRAIL_ADDR=<IP>:<port>` as environment variable.
+2. In offline mode, you start the source computation first, then SnailTrail — vice versa in online mode.
+3. In offline mode, you pass `-f <path/to/dumps>` as CLA — in online mode, you pass `-i <IP>` and `-p <port>`.
+
+For example:
+
+In offline mode, 
+1. Run the source computation. This will generate `*.dump` files.
+2. Analyze the generated offline trace with SnailTrail: `timely-snailtrail -f <path/to/dumps> -s <source peers> <subcommand>`
+  
+In online mode,
+1. Run SnailTrail: `timely-snailtrail -i <IP> -p <port> -s <source peers> <subcommand>`
+2. Attach the source computation by running it with `SNAILTRAIL_ADDR=<IP>:<port>` set as env variable.
 
 ## Examples
 
-- Visit `timely-adapter/examples` for source computation examples.
-- Visit `timely-snailtrail/examples/inspect.rs` for a basic SnailTrail inspector example.
+Visit `timely-adapter/examples` for source computation examples.
 
 ### Show me the code!
 
@@ -68,7 +96,7 @@ The "magic" mostly happens at
 - `timely-adapter/src/connect.rs` for logging a computation
 - `timely-adapter/src/lib.rs` for the `LogRecord` creation,
 - `timely-snailtrail/src/pag.rs` for the `PAG` creation, and the
-- `inspect.rs`, `triangles.rs`, and `minimal.rs` tying it all together.
+- `inspect.rs` command, `triangles.rs` source computation, and `minimal.rs` source computation tying it all together.
 
 ## Structure
 
@@ -108,6 +136,8 @@ Depending on the stream processor, window semantics also come into play here. Fo
 Glue code, type definitions, (de)serialization, and intermediate representations that connect adapters to algorithms.
 
 ### Algorithms
+
+_(WIP)_
 
 Implementation of various algorithms that run on top of the PAG to provide insights into the analyzed distributed dataflow's health and performance.
 
