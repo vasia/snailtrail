@@ -185,13 +185,13 @@ pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Helper to create a `PagEdge` from two `LogRecord`s
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
     /// Takes `LogRecord`s and connects remote edges (per epoch, across workers)
-    fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
+    fn make_remote_edges(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, LogRecord> {
     fn construct_pag(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         self.make_local_edges(index)
-            .concat(&self.make_remote_edges(index))
+            .concat(&self.make_remote_edges())
     }
 
     fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
@@ -201,11 +201,8 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
         let mut vector = Vec::new();
         let mut buffer: HashMap<usize, LogRecord> = HashMap::new();
-        let mut total = 0;
 
         self.unary_frontier(Pipeline, "Local Edges", move |_, _| { move |input, output| {
-            let timer = std::time::Instant::now();
-
             input.for_each(|cap, data| {
                 data.swap(&mut vector);
                 for lr in vector.drain(..) {
@@ -226,11 +223,6 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
                     buffer.insert(local_worker, lr);
                 }
             });
-
-            total += timer.elapsed().as_nanos();
-            if input.frontier().is_empty() {
-                info!("w{} local edges time: {}ms", index, total / 1_000_000);
-            }
         }})
     }
 
@@ -306,7 +298,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         }
     }
 
-    fn make_remote_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
+    fn make_remote_edges(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)> {
         let narrowed = self.filter(|x| x.activity_type == ControlMessage || x.activity_type == DataMessage);
 
         let sent = narrowed
@@ -326,7 +318,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
                 ((x.remote_worker, receiver, x.correlator_id, x.channel_id), x)
             });
 
-        sent.join_edges(index, &received)
+        sent.join_edges(&received)
             .map(|(from, to, t)| {
                 assert!(to.local_worker != from.local_worker);
                 (PagEdge {
@@ -341,14 +333,14 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 }
 
 trait JoinEdges<S: Scope<Timestamp = Pair<u64, Duration>>, D> where D: Data + Hash + Eq + Abomonation + Send + Sync {
-    fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)>;
+    fn join_edges(&self, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>, D> JoinEdges<S, D>
     for Stream<S, (D, LogRecord)>
 where D: Data + Hash + Eq + Abomonation + Send + Sync + std::fmt::Debug
 {
-    fn join_edges(&self, index: usize, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)> {
+    fn join_edges(&self, other: &Stream<S, (D, LogRecord)>) -> Stream<S, (LogRecord, LogRecord, S::Timestamp)> {
         // exchange by epoch doesn't make sense for low epoch_in_flight counts
         // let exchange = Exchange::new(|(_, x): &(_, LogRecord)| x.epoch);
         // let exchange2 = Exchange::new(|(_, x): &(_, LogRecord)| x.epoch);
@@ -372,8 +364,6 @@ where D: Data + Hash + Eq + Abomonation + Send + Sync + std::fmt::Debug
             let mut vector2 = Vec::new();
 
             move |input1, input2, output| {
-                let timer = std::time::Instant::now();
-
                 // Drain first input, check second map, update first map.
                 input1.for_each(|cap, data| {
                     data.swap(&mut vector1);
