@@ -78,7 +78,7 @@ For example, we might want to generate aggregate metrics for an online 2 worker 
 ### Usage example
 
 #### Offline
-1. Run the source computation. This will generate `*.dump` files.
+1. Run the source computation. This will generate `*.dump` files in your `pwd`.
 2. Analyze the generated offline trace with ST2: `st2 -f <path/to/dumps> -s <source peers> <subcommand>`
 
 #### Online:
