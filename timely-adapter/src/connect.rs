@@ -374,19 +374,19 @@ impl PAGLogger {
                                 self.pag_messages += 1;
                                 self.seq_no += 1;
 
-                                // self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
+                                self.buffer.push((self.curr_cap.first, self.seq_no, Some(e.length), (t, wid, x)));
 
-                                let (last_epoch, last_seq, last_length, (last_t, last_wid, last_x)) = self.buffer.pop()
-                                    .expect("non-empty buffer required");
+                                // let (last_epoch, last_seq, last_length, (last_t, last_wid, last_x)) = self.buffer.pop()
+                                    // .expect("non-empty buffer required");
 
-                                assert!(if let Schedule(e) = &last_x {e.start_stop == StartStop::Start}
-                                        else {false});
+                                // assert!(if let Schedule(e) = &last_x {e.start_stop == StartStop::Start}
+                                        // else {false});
 
                                 // Reposition received remote data message:
                                 // 1. push the data message with previous' seq_no
-                                self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (t, wid, x)));
+                                // self.buffer.push((self.curr_cap.first, last_seq, Some(e.length), (t, wid, x)));
                                 // 2. push the schedule event
-                                self.buffer.push((last_epoch, self.seq_no, last_length, (last_t, last_wid, last_x)));
+                                // self.buffer.push((last_epoch, self.seq_no, last_length, (last_t, last_wid, last_x)));
                             }
                         }
                         // remote data send events
