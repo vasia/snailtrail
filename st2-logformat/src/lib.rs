@@ -115,14 +115,6 @@ impl PartialOrd for LogRecord {
     }
 }
 
-// impl std::fmt::Debug for LogRecord {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         write!(f, "{},{:?},{},{},{:?},{:?}",
-//                self.epoch, self.timestamp, self.seq_no, self.local_worker,
-//                self.event_type, self.activity_type)
-//     }
-// }
-
 
 /// This module contains a definition of a new timestamp time, a "pair" or product.
 ///

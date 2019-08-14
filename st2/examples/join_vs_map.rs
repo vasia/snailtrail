@@ -1,4 +1,3 @@
-use logformat::pair::Pair;
 use std::time::Duration;
 use timely::dataflow::Scope;
 use timely::dataflow::Stream;

@@ -12,7 +12,7 @@ use timely::Data;
 use std::time::Duration;
 use std::time::Instant;
 
-use logformat::pair::Pair;
+use st2_logformat::pair::Pair;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;

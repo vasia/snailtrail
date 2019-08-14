@@ -10,8 +10,8 @@ use crate::connect::{Replayer, CompEvent};
 pub mod replay_throttled;
 use crate::replay_throttled::ReplayThrottled;
 
-use logformat::{ActivityType, EventType, LogRecord};
-use logformat::pair::Pair;
+use st2_logformat::{ActivityType, EventType, LogRecord};
+use st2_logformat::pair::Pair;
 
 use std::io::Read;
 use std::time::Duration;

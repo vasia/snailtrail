@@ -1,7 +1,7 @@
 [package]
-name = "logformat"
-version = "0.2.0"
-description = "definitions for data types used to serialize raw traces"
+name = "st2-logformat"
+version = "0.1.0"
+description = "Adapter-agnostic definitions for data types used by ST2"
 homepage = "https://github.com/li1/SnailTrail"
 repository = "https://github.com/li1/snailtrail.git"
 

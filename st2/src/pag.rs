@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::{io::Read, time::Duration};
 use std::cmp::Ordering;
-// use std::collections::hash_map::DefaultHasher;
 use std::hash::Hash;
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
@@ -16,11 +15,11 @@ use timely::dataflow::operators::inspect::Inspect;
 use timely::dataflow::operators::concat::Concat;
 use timely::Data;
 
-use logformat::{ActivityType, EventType, LogRecord, OperatorId};
+use st2_logformat::{ActivityType, EventType, LogRecord, OperatorId};
 use ActivityType::{Busy, Waiting, Scheduling, Processing, Spinning, ControlMessage, DataMessage};
 use EventType::{Sent, Received, Start, End};
-use logformat::pair::Pair;
-use timely_adapter::{connect::Replayer, create_lrs};
+use st2_logformat::pair::Pair;
+use st2_timely::{connect::Replayer, create_lrs};
 
 use abomonation::Abomonation;
 
@@ -28,9 +27,9 @@ use abomonation::Abomonation;
 #[derive(Abomonation, Clone, PartialEq, Hash, Eq, Copy)]
 pub struct PagNode {
     /// Timestamp of the event (also a unique identifier!)
-    pub timestamp: logformat::Timestamp,
+    pub timestamp: st2_logformat::Timestamp,
     /// Unique ID of the worker the event belongs to
-    pub worker_id: logformat::Worker,
+    pub worker_id: st2_logformat::Worker,
     /// Epoch of PagNode
     pub epoch: u64,
     /// seq_no of PagNode

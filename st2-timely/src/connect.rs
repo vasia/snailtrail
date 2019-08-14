@@ -29,7 +29,7 @@ use TimelyEvent::{Messages, Operates, Channels, Progress, Schedule, Text};
 use differential_dataflow::logging::DifferentialEvent;
 use DifferentialEvent::Merge;
 
-use logformat::pair::Pair;
+use st2_logformat::pair::Pair;
 
 
 /// A prepared computation event: (epoch, seq_no, Option<event_length>, event)

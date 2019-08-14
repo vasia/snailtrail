@@ -14,7 +14,7 @@ use timely::progress::frontier::MutableAntichain;
 
 use timely::dataflow::operators::capture::event::{Event, EventIterator};
 
-use logformat::pair::Pair;
+use st2_logformat::pair::Pair;
 use std::time::Duration;
 
 /// Replay a capture stream into a scope with the same timestamp.

@@ -1,5 +1,5 @@
 [workspace]
-members = ["logformat", "st2", "timely-adapter"]
+members = ["st2-logformat", "st2", "st2-timely"]
 
 [profile.release]
 debug = true

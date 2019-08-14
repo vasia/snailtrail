@@ -6,7 +6,7 @@ use crate::pag;
 use crate::pag::PagEdge;
 use crate::STError;
 
-use logformat::pair::Pair;
+use st2_logformat::pair::Pair;
 
 use std::io::Write;
 use std::sync::mpsc;

@@ -16,7 +16,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 
-use logformat::pair::Pair;
+use st2_logformat::pair::Pair;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
