@@ -6,8 +6,6 @@
 #![deny(missing_docs)]
 
 #[macro_use]
-extern crate enum_primitive_derive;
-#[macro_use]
 extern crate abomonation_derive;
 
 use std::cmp::Ordering;
@@ -15,7 +13,7 @@ use std::cmp::Ordering;
 /// The various types of activity that can happen in a dataflow.
 /// `Unknown` et al. shouldn't be emitted by instrumentation. Instead,
 /// they might be inserted as helpers during PAG construction.
-#[derive(Primitive, Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
+#[derive(Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
 pub enum ActivityType {
     /// Operator scheduled. Used as temporary state for `LogRecord`s
     /// where it's still unclear whether they were only spinning or
@@ -47,7 +45,7 @@ pub enum ActivityType {
 /// What "side" of the event did we log? E.g., for
 /// scheduling events, it might be the start or end of the event;
 /// for messages, we might log the sender or receiver.
-#[derive(Primitive, Abomonation, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Clone, Copy)]
+#[derive(Abomonation, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Clone, Copy)]
 pub enum EventType {
     /// Start of an event (e.g. ScheduleStart, Sending a Message)
     Start = 1,
