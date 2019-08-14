@@ -12,7 +12,7 @@ edition = "2018"
 [dependencies]
 timely = "0.10.0"
 differential-dataflow = "0.10.0"
-st2-logformat = { version = "0.1.0", path = "../st2-logformat" }
+st2-logformat = "0.1.0"
 st2-timely = { version = "0.1.0", path = "../st2-timely/" }
 tdiag-connect = "0.2.0"
 abomonation = "0.7"
