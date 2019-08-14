@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Adapter-agnostic definitions for data types used by ST2"
 homepage = "https://github.com/li1/SnailTrail"
 repository = "https://github.com/li1/snailtrail.git"
+license = "MIT, apache"
 
 edition = "2018"
 
