@@ -7,7 +7,7 @@ use timely::logging::TimelyEvent;
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {
         // (A) Create SnailTrail adapter at the beginning of the worker closure
-        use timely_adapter::connect::Adapter;
+        use st2_timely::connect::Adapter;
         let adapter = Adapter::attach(worker);
 
         // worker
