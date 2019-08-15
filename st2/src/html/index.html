@@ -14,6 +14,16 @@
       width: 100%;
       height: 90%;
   }
+
+  div.tooltip {
+    position: absolute;
+    text-align: left;
+    padding: 2px;
+    // font: 12px sans-serif;
+    border: 1px solid black;
+    background: white;
+    pointer-events: none;
+  }
 </style>
 <body>
   <p>
@@ -63,6 +73,18 @@
 
   const genTitle = d => `${d.type} ${d.o === 0 ? '' : 'Op' + d.o + ' '}${d.l > 0 ? '(' + d.l + ')' : ''}`
 
+  const tooltip = d3.select("body").append("div")
+    .attr("class", "tooltip")
+    .style("opacity", 0);
+
+
+  const makeTooltip = d => `
+    w${d.src.w}, ${d.src.t / 1000000} -> w${d.dst.w}, ${d.dst.t / 1000000} <br>
+    type: ${d.type} <br>
+    operator: ${d.o} <br>
+    length: ${d.l} <br>
+    traversal: ${d.tr} <br>`
+
   setEpoch()
   d3.select(window).on('resize', update);
 
@@ -77,6 +99,14 @@
       .enter()
       .append('line')
       .attr('class', 'activity')
+      .on("mouseover", d => {
+        tooltip.transition()
+               .style("opacity", 1);
+        tooltip.html(makeTooltip(d))
+        .style("left", (d3.event.pageX) + "px")
+        .style("top", (d3.event.pageY + 20) + "px");
+      })
+      .on("mouseout", d => tooltip.transition().style("opacity", 0));
 
     state.activities.selectAll("line").data(state.filteredPag)
       .exit()
