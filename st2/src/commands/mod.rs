@@ -6,5 +6,7 @@
 pub mod viz;
 /// Aggregate metrics export
 pub mod metrics;
-/// SnailTrail inspector
+/// ST2 inspector
 pub mod inspect;
+/// Invariants checker
+pub mod invariants;

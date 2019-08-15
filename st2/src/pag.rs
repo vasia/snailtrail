@@ -132,9 +132,9 @@ impl std::fmt::Debug for PagEdge {
         //        self.traverse, self.edge_type,
         //        self.operator_id)
 
-        write!(f, "{:?},{:?},{:?},{:?}",
+        write!(f, "{:?},{:?},{:?},{:?},{:?}",
                self.source, self.destination,
-               self.edge_type, self.operator_id)
+               self.edge_type, self.operator_id, self.length)
     }
 }
 
