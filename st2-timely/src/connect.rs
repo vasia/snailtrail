@@ -155,8 +155,6 @@ pub struct PAGLogger {
     elapsed: std::time::Instant,
     /// For benchmarking (blow up PAG arbitrarily)
     epoch_count: u64,
-    /// Simulate ST1
-    curr_time: Duration,
 }
 
 impl PAGLogger {
@@ -228,7 +226,6 @@ impl PAGLogger {
             pag_messages: 0,
             elapsed: std::time::Instant::now(),
             epoch_count: 0,
-            curr_time: Default::default(),
         }
     }
 
@@ -281,11 +278,6 @@ impl PAGLogger {
             }
             DataflowEvents::Timely(data) => {
                 for (t, wid, x) in data.drain(..) {
-                    if t > Duration::new(1, 0) && t > self.curr_time + Duration::new(1, 0) {
-                        self.tick_epoch();
-                        self.curr_time = t.clone();
-                    }
-
                     self.overall_messages += 1;
 
                     match &x {
@@ -298,7 +290,7 @@ impl PAGLogger {
                     }
 
                     match &x {
-                        // Text(_) => self.tick_epoch(),
+                        Text(_) => self.tick_epoch(),
                         Operates(e) => {
                             self.pag_messages += 1;
                             self.fuel -= 1;
