@@ -99,6 +99,11 @@ fn run() -> Result<(), STError> {
                     .long("temporal-message")
                     .value_name("MS")
                     .help("Temporal invariant: the maximum milliseconds a control or data message is allowed to take"))
+                .arg(clap::Arg::with_name("progress_max")
+                    .short("p")
+                    .long("progress-max")
+                    .value_name("MS")
+                    .help("Progress invariant: the maximum milliseconds between two progress messages per worker"))
         )
         .get_matches();
 
@@ -156,10 +161,16 @@ fn run() -> Result<(), STError> {
                 None
             };
 
+            let progress_max: Option<u64> = if let Some(t) = invariants_args.value_of("progress_max") {
+                Some(t.parse().map_err(|e| STError(format!("Invalid --progress-max: {}", e)))?)
+            } else {
+                None
+            };
+
             let replay_source = make_replay_source(&args)?;
             println!("Connected!");
 
-            st2::commands::invariants::run(timely_configuration, replay_source, temporal_epoch, temporal_operator, temporal_message)
+            st2::commands::invariants::run(timely_configuration, replay_source, temporal_epoch, temporal_operator, temporal_message, progress_max)
         }
         _ => panic!("Invalid subcommand"),
     }

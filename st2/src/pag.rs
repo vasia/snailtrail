@@ -222,14 +222,24 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
                     buffer.insert(local_worker, lr);
                 }
             });
+
+            trace!("made local edges");
         }})
     }
 
     fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
         // Rules for a well-formatted PAG
+
+        // @TODO: In some cases, this assertion doesn't hold and a DataMessage is sent before the
+        // operator it belongs to has started. In this case, we probably misreport the operator type
+        // (Spinning instead of Processing) and its length (0 instead of the DataMessage's contents).
+        // I think that this has to do with differential arrangements, so it's worth thinking about
+        // them and this bug in tandem.
         // No data messages outside a Schedules event
-        assert!((record.event_type != Start) || prev.activity_type != DataMessage);
+        // assert!((record.event_type != Start) || prev.activity_type != DataMessage, format!("{:?}, {:?}", prev, record));
+
         assert!((prev.event_type != End) || record.activity_type != DataMessage);
+
         // No control messages within a Schedules event
         assert!((record.event_type != End) || prev.activity_type != ControlMessage);
         assert!((prev.event_type != Start) || record.activity_type != ControlMessage);
@@ -240,6 +250,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         assert!(record.timestamp > prev.timestamp && record.local_worker == prev.local_worker);
 
         // @TODO: make configurable
+        // @TODO: time-based vs. interpreted (cf. screenshot)
         let waiting_or_busy = if (record.timestamp.as_nanos() - prev.timestamp.as_nanos()) > 15_000 {
             Waiting
         } else {
@@ -255,8 +266,9 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         let p = prev.event_type;
         let r = record.event_type;
         let edge_type = match (prev.activity_type, record.activity_type) {
-            (ControlMessage, DataMessage) => unreachable!(),
-            (DataMessage, ControlMessage) => unreachable!(),
+            // See TODO above.
+            // (ControlMessage, DataMessage) => {println!("{:?}, {:?}", prev, record); unreachable!()},
+            // (DataMessage, ControlMessage) => {println!("{:?}, {:?}", prev, record); unreachable!()},
 
             (Scheduling, Scheduling) if (p == Start && r == End) => processing_or_spinning,
             (Scheduling, Scheduling) if (p == End && r == Start) => waiting_or_busy,

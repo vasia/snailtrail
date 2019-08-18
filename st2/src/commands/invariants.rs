@@ -3,7 +3,6 @@ use crate::pag::ConstructPAG;
 use crate::pag;
 use crate::STError;
 
-use timely::dataflow::ProbeHandle;
 use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::Stream;
 use timely::dataflow::Scope;
@@ -24,7 +23,6 @@ use st2_logformat::ActivityType;
 
 use st2_timely::replay_throttled::ReplayThrottled;
 use st2_timely::ConstructLRs;
-use st2_timely::connect::CompEvent;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
@@ -35,7 +33,8 @@ pub fn run(timely_configuration: timely::Configuration,
            replay_source: ReplaySource,
            temporal_epoch: Option<u64>,
            temporal_operator: Option<u64>,
-           temporal_message: Option<u64>) -> Result<(), STError> {
+           temporal_message: Option<u64>,
+           progress_max: Option<u64>) -> Result<(), STError> {
 
     timely::execute(timely_configuration, move |worker| {
         let index = worker.index();
@@ -47,19 +46,7 @@ pub fn run(timely_configuration: timely::Configuration,
         let mut probe = Handle::new();
         worker.dataflow(|scope| {
             let pag: Stream<_, (PagEdge, Pair<u64, Duration>, isize)>  = pag::create_pag(scope, readers, index, 1);
-            pag
-                .consistency(index, peers, &mut probe, temporal_epoch, temporal_operator, temporal_message);
-
-            // // We don't use pag::create_pag directly here so that
-            // // we can reuse `replay_throttled_into` for operator-dependent
-            // // consistency checking.
-            // let raw_trace = readers.replay_throttled_into(index, scope, None, 1);
-            // raw_trace.consistency(index, peers);
-            // raw_trace
-            //     .construct_lrs(index)
-            //     .construct_pag(index)
-            //     .consistency(index, peers)
-            //     .probe()
+            pag.consistency(index, peers, &mut probe, temporal_epoch, temporal_operator, temporal_message, progress_max);
         });
 
         while !probe.done() { worker.step_or_park(None); };
@@ -89,7 +76,8 @@ trait Invariants<S: Scope<Timestamp = Pair<u64, Duration>>> {
                    probe: &mut Handle<S::Timestamp>,
                    temporal_epoch: Option<u64>,
                    temporal_operator: Option<u64>,
-                   temporal_message: Option<u64>);
+                   temporal_message: Option<u64>,
+                   progress_max: Option<u64>);
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> Invariants<S> for Stream<S, (PagEdge, S::Timestamp, isize)> {
@@ -99,7 +87,8 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> Invariants<S> for Stream<S, (Pag
                    probe: &mut Handle<S::Timestamp>,
                    temporal_epoch: Option<u64>,
                    temporal_operator: Option<u64>,
-                   temporal_message: Option<u64>) {
+                   temporal_message: Option<u64>,
+                   progress_max: Option<u64>) {
         // Ensure that reference computation is making progress.
         // Every worker should send at least one progress message per epoch
         // to each other peer.
@@ -118,6 +107,44 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> Invariants<S> for Stream<S, (Pag
                 println!("Progress Issue: w{}@e{} Sent progress to {} of {} other peers", x.0, t.first - 1, x.1, peers - 1)
             })
             .probe_with(probe);
+
+        // @TODO: This doesn't really help right now, since progress messages are normally sent event if they
+        // don't contain _real_ progress and we have no way of spotting the difference.
+        // @TODO: PR for timely to add frontier information to ProgressEvents
+        if let Some(progress_max) = progress_max {
+            let progress_max = Duration::from_millis(progress_max);
+
+            self
+                .unary(Pipeline, "SlowProgress", move |_, _| {
+                    let mut vector = Vec::new();
+                    let mut last_progress = std::collections::HashMap::new();
+
+                    move |input, output| {
+                        input.for_each(|cap, data| {
+                            data.swap(&mut vector);
+
+                            for (edge, _t, _diff) in vector.drain(..) {
+                                if last_progress.get(&edge.source.worker_id).is_none() {
+                                    last_progress.insert(edge.source.worker_id, (edge.source.timestamp, 1));
+                                } else {
+                                    let &(local_last_progress, multiplier) = last_progress.get(&edge.source.worker_id).expect("always should have some min");
+
+                                    if edge.source.timestamp > local_last_progress && (edge.source.timestamp - local_last_progress > (progress_max * multiplier)) {
+                                        last_progress.insert(edge.source.worker_id, (local_last_progress, multiplier + 1));
+                                        output.session(&cap).give((edge.source.worker_id, (edge.source.timestamp - local_last_progress)));
+                                    }
+
+                                    if edge.edge_type == ActivityType::ControlMessage {
+                                        last_progress.insert(edge.source.worker_id, (edge.source.timestamp, 1));
+                                    }
+                                }
+                            }
+                        })
+                    }
+                })
+                .inspect(move |x| println!("Progress Issue: No progress message sent by w{} since {:?}. Maximum allowed is {:?}.", x.0, x.1, progress_max))
+                .probe_with(probe);
+        }
 
         // Ensure that no round of input of the source computation takes
         // longer than the provided duration in ms.
@@ -231,6 +258,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> Invariants<S> for Stream<S, (Pag
     }
 }
 
+// use st2_timely::connect::CompEvent;
 // impl<S: Scope<Timestamp = Pair<u64, Duration>>> Invariants<S> for Stream<S, CompEvent>
 // {
 //     fn consistency(&self, index: usize, peers: usize) -> Stream<S, ()> {
