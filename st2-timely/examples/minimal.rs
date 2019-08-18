@@ -1,7 +1,7 @@
 use timely::dataflow::InputHandle;
 use timely::dataflow::operators::{Input, Exchange, Inspect, Probe};
 
-use timely_adapter::connect::Adapter;
+use st2_timely::connect::Adapter;
 
 fn main() {
     timely::execute_from_args(std::env::args(), |worker| {

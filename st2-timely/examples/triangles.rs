@@ -15,7 +15,7 @@ use timely::dataflow::Scope;
 use timely::dataflow::ProbeHandle;
 use timely::communication::allocator::Generic;
 
-use timely_adapter::connect::Adapter;
+use st2_timely::connect::Adapter;
 
 use dogsdogsdogs::ProposeExtensionMethod;
 use dogsdogsdogs::{altneu::AltNeu, CollectionIndex};

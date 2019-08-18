@@ -76,6 +76,10 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
                 for (epoch, seq_no, length, (t, wid, x)) in vector.drain(..) {
                     match x {
                         Operates(e) => {
+                            if wid == 0 {
+                                // Dataflow structure logging
+                                info!("{:?}", e);
+                            }
                             let mut addr = e.addr.clone();
                             addr.pop();
                             outer_operates.insert(addr);
