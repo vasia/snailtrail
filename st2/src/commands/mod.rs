@@ -8,5 +8,7 @@ pub mod viz;
 pub mod metrics;
 /// ST2 inspector
 pub mod inspect;
+/// ST2 graph algorithms
+pub mod algo;
 /// Invariants checker
 pub mod invariants;

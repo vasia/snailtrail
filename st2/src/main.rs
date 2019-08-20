@@ -79,7 +79,11 @@ fn run() -> Result<(), STError> {
         )
         .subcommand(
             clap::SubCommand::with_name("inspect")
-                .about("run SnailTrail inspector")
+                .about("run ST2 inspector")
+        )
+        .subcommand(
+            clap::SubCommand::with_name("algo")
+                .about("run ST2 graph algorithms")
         )
         .subcommand(
             clap::SubCommand::with_name("invariants")
@@ -143,6 +147,12 @@ fn run() -> Result<(), STError> {
             println!("Connected!");
 
             st2::commands::inspect::run(timely_configuration, replay_source)
+        }
+        ("algo", Some(_algo_args)) => {
+            let replay_source = make_replay_source(&args)?;
+            println!("Connected!");
+
+            st2::commands::algo::run(timely_configuration, replay_source)
         }
         ("invariants", Some(invariants_args)) => {
             let temporal_epoch: Option<u64> = if let Some(t) = invariants_args.value_of("temporal_epoch") {
