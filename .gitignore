@@ -3,9 +3,12 @@
 *.bk
 *.dump
 
+node_modules/
+
 plots/
 prepped/
 tmp/
+package-lock.json
 
 # Nothing yet
 
