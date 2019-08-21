@@ -10,10 +10,12 @@ extern crate abomonation_derive;
 
 use std::cmp::Ordering;
 
+use serde::{Deserialize, Serialize};
+
 /// The various types of activity that can happen in a dataflow.
 /// `Unknown` et al. shouldn't be emitted by instrumentation. Instead,
 /// they might be inserted as helpers during PAG construction.
-#[derive(Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
+#[derive(Abomonation, PartialEq, Debug, Clone, Copy, Hash, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum ActivityType {
     /// Operator scheduled. Used as temporary state for `LogRecord`s
     /// where it's still unclear whether they were only spinning or

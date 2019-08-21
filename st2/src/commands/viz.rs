@@ -81,7 +81,6 @@ pub fn render(output_path: &std::path::Path, worker_handles: WorkerGuards<()>, p
 
     let mut file = std::fs::File::create(output_path).map_err(|e| panic!(format!("io error: {}", e))).expect("could not create file");
 
-    expect_write(writeln!(file, "<script type=\"text/javascript\">"));
     expect_write(writeln!(file, "let pag = ["));
 
     for edge in pag.extract().into_iter().flat_map(|(_t, v)| v) {
@@ -101,8 +100,6 @@ pub fn render(output_path: &std::path::Path, worker_handles: WorkerGuards<()>, p
         ))
     }
     expect_write(writeln!(file, "];"));
-    expect_write(writeln!(file, "</script>"));
-    expect_write(writeln!(file, "{}", HTML));
 }
 
 /// Unwraps a write.

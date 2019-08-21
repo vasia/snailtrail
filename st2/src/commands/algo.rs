@@ -5,18 +5,6 @@ use crate::STError;
 use timely::dataflow::Scope;
 use timely::dataflow::Stream;
 use timely::dataflow::operators::filter::Filter;
-use timely::Data;
-use timely::dataflow::operators::generic::operator::Operator;
-use timely::dataflow::operators::exchange::Exchange;
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::feedback::Feedback;
-use timely::dataflow::operators::concat::Concat;
-use timely::dataflow::operators::branch::BranchWhen;
-use timely::dataflow::operators::feedback::ConnectLoop;
-use timely::dataflow::operators::enterleave::Enter;
-use timely::dataflow::operators::enterleave::Leave;
-use timely::order::Product;
-use timely::dataflow::operators::partition::Partition;
 use timely::dataflow::operators::map::Map;
 use timely::dataflow::operators::delay::Delay;
 
@@ -25,21 +13,14 @@ use differential_dataflow::Collection;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::join::JoinCore;
-use differential_dataflow::operators::reduce::Threshold;
-use differential_dataflow::operators::iterate::Iterate;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::reduce::Reduce;
 
 use std::time::Duration;
-use std::hash::Hash;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::Cell;
 use std::sync::mpsc;
 use std::sync::{Mutex, Arc};
-use std::thread;
+use std::fmt::Debug;
 
 use st2_logformat::pair::Pair;
 use st2_logformat::ActivityType;
@@ -47,9 +28,31 @@ use st2_logformat::ActivityType;
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
 
-use abomonation::Abomonation;
+use ws::listen;
+use ws::util::Token;
+use ws::Handler;
+use ws::Sender;
+use ws::Handshake;
 
-use ws::{listen, connect};
+use serde::{Deserialize, Serialize};
+use serde_json;
+
+struct Server<'a, T: Debug + Serialize> { out: Sender, pag_recv: &'a mpsc::Receiver<T> }
+impl<'a, T: Debug + Serialize> Handler for Server<'a, T> {
+    fn on_open(&mut self, _: Handshake) -> ws::Result<()> {
+        self.out.timeout(50, Token(1))
+    }
+
+    fn on_timeout(&mut self, _event: Token) -> ws::Result<()> {
+        for _i in 0 .. 50 {
+            if let Ok(recv) = self.pag_recv.try_recv() {
+                println!("{:?}", recv);
+                self.out.send(serde_json::to_string(&recv).unwrap())?;
+            }
+        }
+        self.out.timeout(10, Token(1))
+    }
+}
 
 /// Inspects a running SnailTrail computation, e.g. for benchmarking of SnailTrail itself.
 pub fn run(
@@ -60,26 +63,7 @@ pub fn run(
     let pag_send = Arc::new(Mutex::new(pag_send));
 
     let listener = std::thread::spawn(move || {
-        listen("127.0.0.1:3012", move |out| {
-            println!("listening");
-            while let Ok(recv) = pag_recv.recv() {
-                println!("{:?}", recv);
-            }
-
-            move |msg| {
-                println!("Got message: {}", msg);
-                // out.send(msg)
-                Ok(())
-            }
-        }).expect("couldn't listen");
-    });
-
-    std::thread::spawn(move || {
-        connect("ws://127.0.0.1:3012", move |out| {
-            move |msg| {
-                println!("connectGot message: {}", msg);
-            }
-        }).expect("couldn't connect");
+        listen("127.0.0.1:3012", |out| { Server { out, pag_recv: &pag_recv } } ).unwrap();
     });
 
     timely::execute(timely_configuration, move |worker| {
@@ -96,7 +80,7 @@ pub fn run(
                 .delay_batch(|time| Pair::new(time.first + 1, Default::default()))
                 .map(|(x, t, diff)| (x, Pair::new(t.first + 1, Default::default()), diff))
                 .algo(5)
-                .inspect(move |x| pag_send.send(x.clone()).unwrap());
+                .inspect(move |(x, t, diff)| pag_send.send((x.clone(), t.first, *diff)).unwrap());
         });
     })
         .map_err(|x| STError(format!("error in the timely computation: {}", x)))?;
@@ -143,7 +127,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> Algorithms<S> for Stream<S, (Pag
             .expect("?")
             .concatenate(streams)
             .map(|(_key, new)| ((new.0).edge_type, new))
-            .reduce(|key, input, output| {
+            .reduce(|_key, input, output| {
                 let summary = input.iter().fold((0, 0), |acc, ((_edge, weight), diff)| {
                     (acc.0 + *diff, acc.1 + *diff * *weight as isize)
                 });
