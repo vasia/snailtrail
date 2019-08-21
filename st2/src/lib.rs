@@ -20,11 +20,10 @@ pub mod algo;
 /// Contains the PAG construction
 pub mod pag;
 
-/// Contains commands to execute SnailTrail
+/// Contains commands to execute ST2
 pub mod commands;
 
-
-/// A generic SnailTrail error
+/// A generic ST2 error
 pub struct STError(pub String);
 
 impl From<std::io::Error> for STError {
