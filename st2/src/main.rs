@@ -8,11 +8,22 @@ use env_logger;
 
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::fmt::Debug;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
 
 use st2::STError;
+
+use ws::util::Token;
+use ws::Handshake;
+use ws::Handler;
+use ws::Sender;
+
+use ws::listen;
+
+use serde::Serialize;
 
 fn main() {
     env_logger::init();
@@ -124,6 +135,12 @@ fn run() -> Result<(), STError> {
         n => timely::Configuration::Process(n),
     };
 
+    let (pag_send, pag_recv) = mpsc::channel();
+    let pag_send = Arc::new(Mutex::new(pag_send));
+
+    let listener = std::thread::spawn(move || {
+        listen("127.0.0.1:3012", |out| { Server { out, pag_recv: &pag_recv } } ).unwrap();
+    });
 
     match args.subcommand() {
         ("viz", Some(viz_args)) => {
@@ -152,7 +169,7 @@ fn run() -> Result<(), STError> {
             let replay_source = make_replay_source(&args)?;
             println!("Connected!");
 
-            st2::commands::algo::run(timely_configuration, replay_source)
+            st2::commands::algo::run(timely_configuration, replay_source, pag_send)
         }
         ("invariants", Some(invariants_args)) => {
             let temporal_epoch: Option<u64> = if let Some(t) = invariants_args.value_of("temporal_epoch") {
@@ -183,7 +200,11 @@ fn run() -> Result<(), STError> {
             st2::commands::invariants::run(timely_configuration, replay_source, temporal_epoch, temporal_operator, temporal_message, progress_max)
         }
         _ => panic!("Invalid subcommand"),
-    }
+    }?;
+
+    listener.join().expect("couldn't join listener");
+
+    Ok(())
 }
 
 /// creates one socket per worker in the computation we're examining
@@ -212,5 +233,29 @@ fn make_replay_source(args: &clap::ArgMatches) -> Result<ReplaySource, STError> 
 
         let sockets = connect::open_sockets(ip_addr, port, source_peers)?;
         Ok(ReplaySource::Tcp(Arc::new(Mutex::new(sockets))))
+    }
+}
+
+
+struct Server<'a, T: Debug + Serialize> { out: Sender, pag_recv: &'a mpsc::Receiver<T> }
+impl<'a, T: Debug + Serialize> Handler for Server<'a, T> {
+    fn on_open(&mut self, _: Handshake) -> ws::Result<()> {
+        self.out.timeout(50, Token(1))
+    }
+
+    fn on_timeout(&mut self, _event: Token) -> ws::Result<()> {
+        let to_send = (0 .. 100).fold(Vec::new(), |mut acc, _| {
+            if let Ok(recv) = self.pag_recv.try_recv() {
+                acc.push(recv);
+            }
+
+            acc
+        });
+
+        if to_send.len() > 0 {
+            self.out.send(serde_json::to_string(&to_send).unwrap())?;
+        }
+
+        self.out.timeout(50, Token(1))
     }
 }

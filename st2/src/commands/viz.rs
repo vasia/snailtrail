@@ -13,8 +13,6 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-static HTML: &str = include_str!("../html/index.html");
-
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
 

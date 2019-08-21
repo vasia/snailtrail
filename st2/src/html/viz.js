@@ -2,6 +2,9 @@ document.querySelector("#epoch").addEventListener("change", function() {
   setEpoch();
 });
 
+// if not empty, everything else will be lowlighted
+let toHighlight = new Set();
+
 let types = {
   ["Processing"]: "#0b6623",
   ["Spinning"]: "#e48282",
@@ -50,6 +53,11 @@ const makeTooltip = d => `
     operator: ${d.o} <br>
     length: ${d.l} <br>
     traversal: ${d.tr} <br>`;
+
+const hopCheckbox = document.getElementById("hop-highlight");
+hopCheckbox.addEventListener("change", function() {
+  update();
+});
 
 setEpoch();
 d3.select(window).on('resize', update);
@@ -115,12 +123,25 @@ function update() {
     .attr('stroke-width', d => d.src.w !== d.dst.w ? 1.5 : 2)
     .attr('x2', (d) => xt(d.dst.t / 1000000))
     .attr('y2', d => 100 * (1 + d.dst.w))
-    .attr('stroke-opacity', d => d.src.w !== d.dst.w ? 0.3 : 1)
+    .attr('stroke-opacity', d => {
+      if (toHighlight.size > 0 && hopCheckbox.checked) {
+        return (toHighlight.has(`${d.src.t}${d.dst.t}`) ? 1 : 0.1);
+      } else {
+        return 1;
+      }
+    })
     .attr('stroke-dasharray', d => (d.src.w !== d.dst.w) ? "5,5" : "5,0");
 
   state.activities.selectAll("text").data(state.filteredPag)
     .attr("x", d => xt((d.src.t + d.dst.t) / (2 * 1000000)) - 30)
     .attr("y", d => (((1 + d.src.w) + (1 + d.dst.w)) / 2) * 100 - 10)
     .attr("fill", d => types[d.type])
+    .attr("opacity", d => {
+      if (toHighlight.size > 0 && hopCheckbox.checked) {
+        return (toHighlight.has(`${d.src.t}${d.dst.t}`) ? 1 : 0.1);
+      } else {
+        return 1;
+      }
+    })
     .text(genTitle);
 }

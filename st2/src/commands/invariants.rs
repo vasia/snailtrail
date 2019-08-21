@@ -1,5 +1,4 @@
 use crate::pag::PagEdge;
-use crate::pag::ConstructPAG;
 use crate::pag;
 use crate::STError;
 
@@ -10,7 +9,6 @@ use timely::dataflow::operators::map::Map;
 use timely::dataflow::operators::delay::Delay;
 use timely::dataflow::operators::aggregation::aggregate::Aggregate;
 use timely::dataflow::operators::inspect::Inspect;
-use timely::logging::TimelyEvent;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::operators::probe::Handle;
@@ -20,9 +18,6 @@ use std::time::Duration;
 
 use st2_logformat::pair::Pair;
 use st2_logformat::ActivityType;
-
-use st2_timely::replay_throttled::ReplayThrottled;
-use st2_timely::ConstructLRs;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
@@ -82,7 +77,7 @@ trait Invariants<S: Scope<Timestamp = Pair<u64, Duration>>> {
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> Invariants<S> for Stream<S, (PagEdge, S::Timestamp, isize)> {
     fn consistency(&self,
-                   index: usize,
+                   _index: usize,
                    peers: usize,
                    probe: &mut Handle<S::Timestamp>,
                    temporal_epoch: Option<u64>,

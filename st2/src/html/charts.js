@@ -48,28 +48,26 @@ async function main() {
   );
 
   socket.onmessage = e => {
-    const [[activity, [count, weighted]], t, diff] = JSON.parse(e.data);
-    const khopChanges = [{ type: activity, count: count }];
-    const khopWeightedChanges = [{ type: activity, count: weighted }];
+    let data = JSON.parse(e.data);
+    const agg = data
+      .filter(datum => datum["Agg"] !== undefined)
+      .map(datum => Object.values(datum)[0]);
+    const agg_count = agg.map(([[type, [count, weighted]], t]) => ({ type, count }));
+    const agg_weighted = agg.map(([[type, [count, weighted]], t]) => ({ type, count }));
 
-    if (diff > 0) {
-      document.getElementById("k-epoch").innerHTML = "Epoch: " + t;
-      document.getElementById("k-weighted-epoch").innerHTML = "Epoch: " + t;
-
-      khop.view
-        .change('table', vega.changeset().insert(khopChanges))
-        .run();
-      khopWeighted.view
-        .change('table', vega.changeset().insert(khopWeightedChanges))
-        .run();
-    } else {
-      khop.view
-        .change('table', vega.changeset().remove(khopChanges))
-        .run();
-      khopWeighted.view
-        .change('table', vega.changeset().insert(khopWeightedChanges))
-        .run();
+    khop.view.change('table', vega.changeset().insert(agg_count)).run();
+    khopWeighted.view.change('table', vega.changeset().insert(agg_weighted)).run();
+    if (agg.length > 0) {
+      document.getElementById("k-epoch").innerHTML = "Epoch: " + agg[agg.length - 1][1];
+      document.getElementById("k-weighted-epoch").innerHTML = "Epoch: " + agg[agg.length - 1][1];
     }
+
+    const all = data
+      .filter(datum => datum["All"] !== undefined)
+      .map(datum => Object.values(datum)[0]);
+    all.forEach(d => toHighlight.add(`${d[0]}${d[1]}`));
+    console.log(toHighlight);
+    update();
   };
 }
 
