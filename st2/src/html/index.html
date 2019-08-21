@@ -54,16 +54,28 @@
         <b style="margin-right: 6px">Epoch: </b>
         <input id="epoch" type="text" value="1" id="epoch">
     </div>
-    <div id="react-container">
-        Here goes React.
-    </div
+
+    <div style="display: flex; flex-flow: row wrap;">
+      <div>
+        <h2>5 hops</h2>
+        <div id="k-epoch">Epoch 0</div>
+        <div id="khop"></div>
+      </div>
+
+      <div>
+        <h2>5 hops (weighted)</h2>
+        <div id="k-weighted-epoch">Epoch 0</div>
+        <div id="khop-weighted"></div>
+      </div
+    </div>
 
     <!-- Note: when deploying, replace "development.js" with "production.min.js". -->
-    <script src="https://unpkg.com/react@16/umd/react.development.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@16/umd/react-dom.development.js" crossorigin></script>
-    <script src="https://d3js.org/d3.v5.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega@5/build/vega-core.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@4"></script>
     <script src="pag.js" defer></script>
     <script src="viz.js" defer></script>
-    <script src="dashboard.js"></script>
+    <script src="charts.js"></script>
 </body>
 </html>
