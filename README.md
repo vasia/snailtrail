@@ -16,7 +16,7 @@ Similar to [Timely Diagnostics](https://github.com/timelydataflow/diagnostics), 
 
 ### 1. Attach ST2 to a source computation with `timely-adapter`
 
-Attach ST2 at `(A)` and `(B)` to any source computation (the example can be found at `timely-adapter/examples/minimal.rs`):
+Attach ST2 at `(A)` and `(B)` to any source computation (the example can be found at `st2-timely/examples/minimal.rs`):
 
 ```rust
 use timely_adapter::connect::Adapter;
@@ -58,7 +58,7 @@ fn main() {
 
 For example, we might want to generate aggregate metrics for an online 2 worker source computation using 2 ST2 peers:
 
-1. Run `st2 -i 127.0.0.1 -p 1234 -s 2 -w 2 -o metrics.csv`.
+1. Run `st2 -i 127.0.0.1 -p 1234 -s 2 -w 2 metrics -o metrics.csv`.
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR="127.0.0.1:1234"` as env variable.
 3. See `metrics.csv` for the aggregate metrics.
 
