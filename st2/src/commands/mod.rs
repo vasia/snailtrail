@@ -12,3 +12,5 @@ pub mod inspect;
 pub mod algo;
 /// Invariants checker
 pub mod invariants;
+/// Online dashboard
+pub mod dashboard;

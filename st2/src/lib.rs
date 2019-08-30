@@ -8,6 +8,10 @@
 
 #![deny(missing_docs)]
 
+use crate::pag::PagEdge;
+use st2_logformat::ActivityType;
+use serde::Serialize;
+
 #[macro_use]
 extern crate abomonation_derive;
 
@@ -40,6 +44,43 @@ impl From<tdiag_connect::ConnectError> for STError {
         }
     }
 }
+
+
+#[derive(Serialize, Debug)]
+/// Serialization type for socket
+pub enum PagData {
+    /// Pag edges
+    Pag(PagEdge),
+    /// all events (for highlighting)
+    All((u64, u64)),
+    /// aggregates (for analysis)
+    Agg(KHopSummaryData),
+    /// metrics
+    Met(MetricsData)
+}
+
+#[derive(Serialize, Debug)]
+/// Serialization type for khop summaries
+/// edge_type, worker_id, activity_count, weighted activity_count
+pub struct KHopSummaryData {
+    a: ActivityType,
+    wf: u64,
+    ac: isize,
+    wac: isize,
+}
+
+#[derive(Serialize, Debug)]
+/// Serialization type for metrics
+/// from_worker,to_worker,activity_type,#(activities),t(activities),#(records)
+pub struct MetricsData {
+    wf: u64,
+    wt: u64,
+    a: ActivityType,
+    ac: u64,
+    at: u64,
+    rc: u64,
+}
+
 
 
 // /// Collects all data within a single epoch and applies user-defined logic.

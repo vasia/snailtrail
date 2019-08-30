@@ -23,8 +23,11 @@ use st2_timely::{connect::Replayer, create_lrs};
 
 use abomonation::Abomonation;
 
+use serde::Serialize;
+
+
 /// A node in the PAG
-#[derive(Abomonation, Clone, PartialEq, Hash, Eq, Copy)]
+#[derive(Abomonation, Clone, PartialEq, Hash, Eq, Copy, Serialize)]
 pub struct PagNode {
     /// Timestamp of the event (also a unique identifier!)
     pub timestamp: st2_logformat::Timestamp,
@@ -69,7 +72,7 @@ impl std::fmt::Debug for PagNode {
 /// Information on how to traverse an edge. This is used e.g. in critical
 /// participation to decide whether an edge should be included in the critical
 /// path calculation. A `Block`ed edge can't be traversed (e.g. waiting activities)
-#[derive(Abomonation, Hash, Clone, Eq, Ord, PartialEq, PartialOrd, Debug)]
+#[derive(Abomonation, Hash, Clone, Eq, Ord, PartialEq, PartialOrd, Debug, Serialize)]
 pub enum TraversalType {
     /// Unclear traversal
     Undefined,
@@ -80,7 +83,7 @@ pub enum TraversalType {
 }
 
 /// An edge in the activity graph
-#[derive(Abomonation, Clone, PartialEq, Hash, Eq)]
+#[derive(Abomonation, Clone, PartialEq, Hash, Eq, Serialize)]
 pub struct PagEdge {
     /// The source node
     pub source: PagNode,
