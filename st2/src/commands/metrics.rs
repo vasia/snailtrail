@@ -1,8 +1,6 @@
 use crate::pag;
 use crate::pag::PagEdge;
 
-use timely::dataflow::ProbeHandle;
-use timely::dataflow::operators::probe::Probe;
 use timely::dataflow::Scope;
 use timely::dataflow::Stream;
 use timely::dataflow::operators::inspect::Inspect;
@@ -15,8 +13,10 @@ use std::sync::{Arc, Mutex};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::convert::TryInto;
 
 use st2_logformat::pair::Pair;
+use st2_logformat::ActivityType;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
@@ -40,14 +40,23 @@ pub fn run(
         // read replayers from file (offline) or TCP stream (online)
         let readers = connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
 
-        let probe: ProbeHandle<Pair<u64, Duration>> = worker.dataflow(|scope| {
-            let pag: Stream<_, (PagEdge, Pair<u64, Duration>, isize)>  = pag::create_pag(scope, readers, index, throttle);
-            pag.activities(index, Arc::clone(&file)).probe()
+        worker.dataflow(|scope| {
+            let file = Arc::clone(&file);
+
+            if index == 0 {
+                expect_write(writeln!(*file.lock().unwrap(), "epoch,from_worker,to_worker,activity_type,#(activities),t(activities),#(records)"));
+            }
+
+            let pag = pag::create_pag(scope, readers, index, throttle);
+
+            pag
+                .metrics()
+                .inspect_time(move |t,x| expect_write(
+                    writeln!(*file.lock().unwrap(),
+                             "{:?},{},{},{:?},{},{},{}",
+                             t.first - 1, x.0, x.1, x.2, x.3, x.4, x.5)
+                ));
         });
-
-        while !probe.done() { worker.step_or_park(None); };
-
-        info!("w{} done", index);
     })
         .map_err(|x| STError(format!("error in the timely computation: {}", x)))?;
 
@@ -61,30 +70,26 @@ fn calculate_hash<T: Hash>(t: &T) -> u64 {
 }
 
 /// Benchmarks epoch duration & # of events passing through
-trait Metrics<S: Scope<Timestamp = Pair<u64, Duration>>> {
+pub trait Metrics<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Reports activity type & duration per epoch per worker
-    fn activities(&self, index: usize, file: Arc<Mutex<std::fs::File>>) -> Stream<S, ()>;
+    fn metrics(&self) -> Stream<S, (u64, u64, ActivityType, u64, u64, u64)>;
 }
 
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> Metrics<S> for Stream<S, (PagEdge, S::Timestamp, isize)> {
-    fn activities(&self, index: usize, file: Arc<Mutex<std::fs::File>>) -> Stream<S, ()> {
-        if index == 0 {
-            expect_write(writeln!(*file.lock().unwrap(), "epoch,from_worker,to_worker,activity_type,#(activities),t(activities),#(records)"));
-        }
+    fn metrics(&self) -> Stream<S, (u64, u64, ActivityType, u64, u64, u64)> {
 
         self
             .delay_batch(|time| Pair::new(time.first + 1, Default::default()))
             .map(|(edge, _t, _diff)| ((edge.source.worker_id, edge.destination.worker_id, edge.edge_type), edge))
-            .aggregate::<_,(u64, u128, u64),_,_,_>(
+            .aggregate::<_,(u64, u64, u64),_,_,_>(
                 |_key, edge, acc| {
+                    let duration: u64 = edge.duration().try_into().unwrap();
                     *acc = (acc.0 + 1,
-                            acc.1 + edge.duration(),
+                            acc.1 + duration,
                             acc.2 + edge.length.unwrap_or(0) as u64);
                 },
                 |key, acc| (key.0, key.1, key.2, acc.0, acc.1, acc.2),
                 |key| calculate_hash(key))
-            .inspect_time(move |t,x| expect_write(writeln!(*file.lock().unwrap(), "{:?},{},{},{:?},{},{},{}", t.first - 1, x.0, x.1, x.2, x.3, x.4, x.5)))
-            .map(|_| ())
     }
 }
 
