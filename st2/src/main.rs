@@ -70,15 +70,6 @@ fn run() -> Result<(), STError> {
              .value_name("WORKERS")
              .help("Number of worker threads for SnailTrail")
              .default_value("1"))
-        .subcommand(clap::SubCommand::with_name("viz")
-            .about("Render a PAG visualization")
-            .arg(clap::Arg::with_name("output_path")
-                .short("o")
-                .long("out")
-                .value_name("PATH")
-                .help("The output path for the generated html file (don't forget the .html extension)")
-                .default_value("graph.html"))
-        )
         .subcommand(
             clap::SubCommand::with_name("metrics")
                 .about("Write dataflow metrics to file")
@@ -156,14 +147,6 @@ fn run() -> Result<(), STError> {
     };
 
     match args.subcommand() {
-        ("viz", Some(viz_args)) => {
-            let output_path = std::path::Path::new(viz_args.value_of("output_path").expect("error parsing viz output args"));
-
-            let replay_source = make_replay_source(&args)?;
-            println!("Connected!");
-
-            st2::commands::viz::run(timely_configuration, replay_source, output_path)
-        }
         ("metrics", Some(metrics_args)) => {
             let output_path = std::path::Path::new(metrics_args.value_of("output_path").expect("error parsing metrics output args"));
 
