@@ -341,6 +341,9 @@ function App() {
     socket.send(JSON.stringify({ type: 'ALL', epoch }));
     socket.send(JSON.stringify({ type: 'MET', epoch }));
     d3.select(window).on('resize', updatePAG());
+
+    socket.send(JSON.stringify({ type: 'INV' }));
+    setInterval(() => { socket.send(JSON.stringify({ type: 'INV' })); }, 5000);
   }, []);
 
   const epochUpdate = e => {
@@ -363,7 +366,7 @@ function App() {
   return (
     <div>
       <h1 style={{ textAlign: "center" }}> ST2 Dashboard</h1>
-      <h2>PAG Viz</h2>
+      <h1>PAG Viz</h1>
       <div id="d3"></div>
       <div className="viz-settings">
         <b style={{ marginRight: "6px" }}>Highlight hops: </b>
@@ -383,6 +386,7 @@ function App() {
         <CrossMetrics epoch={epoch} showWaiting={showWaiting} splitWorker={splitWorker}></CrossMetrics>
         <RecordMetrics epoch={epoch} showWaiting={showWaiting} splitWorker={splitWorker}></RecordMetrics>
       </div>
+      <Invariants></Invariants>
     </div >
   );
 }
@@ -619,6 +623,111 @@ function KHops({ epoch, showWaiting, splitWorker }) {
         </div>
       </div>
     </div>
+  );
+}
+
+const formatE = e => {
+  if (e.length > 0) {
+    return e
+      .sort((a, b) => ((ns(b.to.timestamp) - ns(b.from.timestamp)) - (ns(a.to.timestamp) - ns(a.from.timestamp))))
+      .map(({ from, to }) => {
+        const duration = ((ns(to.timestamp) - ns(from.timestamp)) / 1000000).toFixed(2);
+        return `Epoch ${from.epoch} took ${duration}ms.`;
+      })
+      .join("\n");
+  } else {
+    return "No invariants violated.";
+  }
+};
+
+const ns = ts => ts.nanos + ts.secs * 1000000000;
+
+const formatO = e => {
+  if (e.length > 0) {
+    return e
+      .sort((a, b) => ((ns(b.from.destination.timestamp) - ns(b.from.source.timestamp)) - (ns(a.from.destination.timestamp) - ns(a.from.source.timestamp))))
+      .map(({ from, to }) => {
+        const duration = ((ns(from.destination.timestamp) - ns(from.source.timestamp)) / 1000000).toFixed(2);
+        return `Epoch ${from.source.epoch} | w${from.source.worker_id} @ ${ns(from.source.timestamp)}: Operator ${from.operator_id} (${from.edge_type}) took ${duration}ms.`;
+      })
+      .join("\n");
+  } else {
+    return "No invariants violated.";
+  }
+
+};
+
+const formatM = e => {
+  if (e.length > 0) {
+    return e
+      .sort((a, b) => ((ns(b.msg.destination.timestamp) - ns(b.msg.source.timestamp)) - (ns(a.msg.destination.timestamp) - ns(a.msg.source.timestamp))))
+      .map(({ msg }) => {
+        const duration = ((ns(msg.destination.timestamp) - ns(msg.source.timestamp)) / 1000000).toFixed(2);
+        return `Epoch ${msg.source.epoch} | w${msg.source.worker_id} @ ${ns(msg.source.timestamp)} -> w${msg.destination.worker_id} @ ${ns(msg.destination.timestamp)}: ${msg.edge_type} took ${duration}ms.`;
+      })
+      .join("\n");
+  } else {
+    return "No invariants violated.";
+  }
+};
+
+function Invariants() {
+  const [mEpoch, setMEpoch] = React.useState([]);
+  const [mOp, setMOp] = React.useState([]);
+  const [mMsg, setMMsg] = React.useState([]);
+  const [mE, setME] = React.useState(null);
+  const [mO, setMO] = React.useState(null);
+  const [mM, setMM] = React.useState(null);
+
+  React.useEffect(() => {
+    socket.addEventListener("message", e => {
+      const { type, payload } = JSON.parse(e.data);
+      if (type === "INV") {
+        let e = [];
+        let o = [];
+        let m = [];
+
+        payload.forEach(p => {
+          if (p["Epoch"]) {
+            if (!mE) {
+              setME(`${p["Epoch"].max / 1000000}`);
+            }
+            e.push(p["Epoch"]);
+          } else if (p["Operator"]) {
+            if (!mO) {
+              setMO(`${p["Operator"].max / 1000000}`);
+            }
+            o.push(p["Operator"]);
+          } else if (p["Message"]) {
+            if (!mM) {
+              setMM(`${p["Message"].max / 1000000}`);
+            }
+            m.push(p["Message"]);
+          }
+        });
+
+        e.length && setMEpoch(prev => prev.concat(e));
+        o.length && setMOp(prev => prev.concat(o));
+        m.length && setMMsg(prev => prev.concat(m));
+      }
+    });
+  }, []);
+
+
+  return (
+    <div>
+      <h1>Invariant Violations (over all epochs)</h1>
+      <div style={{ display: "flex", flexFlow: "row wrap", width: "100%" }}>
+        <h2 className="inv">Epoch Duration {mE && `(max: ${mE}ms)`}</h2>
+        <h2 className="inv">Operator Duration {mO && `(max: ${mO}ms)`}</h2>
+        <h2 className="inv">Message Duration {mM && `(max: ${mM}ms)`}</h2>
+      </div>
+      <div style={{ display: "flex", flexFlow: "row wrap", width: "100%" }}>
+        <textarea className="log inv" rows="15" disabled value={formatE(mEpoch)}></textarea>
+        <textarea className="log inv" rows="15" disabled value={formatO(mOp)}></textarea>
+        <textarea className="log inv" rows="15" disabled value={formatM(mMsg)}></textarea>
+      </div>
+    </div >
   );
 }
 

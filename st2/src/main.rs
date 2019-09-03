@@ -100,23 +100,38 @@ fn run() -> Result<(), STError> {
         .subcommand(
             clap::SubCommand::with_name("dashboard")
                 .about("run ST2 live dashboard")
+                .arg(clap::Arg::with_name("epoch_max")
+                    .short("e")
+                    .long("epoch-max")
+                    .value_name("MS")
+                    .help("Temporal invariant: the maximum milliseconds an epoch is allowed to take"))
+                .arg(clap::Arg::with_name("operator_max")
+                    .short("o")
+                    .long("operator-max")
+                    .value_name("MS")
+                    .help("Temporal invariant: the maximum milliseconds an operator is allowed to take"))
+                .arg(clap::Arg::with_name("message_max")
+                    .short("m")
+                    .long("message-max")
+                    .value_name("MS")
+                    .help("Temporal invariant: the maximum milliseconds a control or data message is allowed to take"))
         )
         .subcommand(
             clap::SubCommand::with_name("invariants")
                 .about("run invariants checker")
-                .arg(clap::Arg::with_name("temporal_epoch")
+                .arg(clap::Arg::with_name("epoch_max")
                     .short("e")
-                    .long("temporal-epoch")
+                    .long("epoch-max")
                     .value_name("MS")
                     .help("Temporal invariant: the maximum milliseconds an epoch is allowed to take"))
-                .arg(clap::Arg::with_name("temporal_operator")
+                .arg(clap::Arg::with_name("operator_max")
                     .short("o")
-                    .long("temporal-operator")
+                    .long("operator-max")
                     .value_name("MS")
                     .help("Temporal invariant: the maximum milliseconds an operator is allowed to take"))
-                .arg(clap::Arg::with_name("temporal_message")
+                .arg(clap::Arg::with_name("message_max")
                     .short("m")
-                    .long("temporal-message")
+                    .long("message-max")
                     .value_name("MS")
                     .help("Temporal invariant: the maximum milliseconds a control or data message is allowed to take"))
                 .arg(clap::Arg::with_name("progress_max")
@@ -169,7 +184,24 @@ fn run() -> Result<(), STError> {
 
             st2::commands::algo::run(timely_configuration, replay_source)
         }
-        ("dashboard", Some(_dashboard_args)) => {
+        ("dashboard", Some(dashboard_args)) => {
+            let epoch_max: Option<u64> = if let Some(t) = dashboard_args.value_of("epoch_max") {
+                println!("epoch max given");
+                Some(t.parse().map_err(|e| STError(format!("Invalid --epoch-max: {}", e)))?)
+            } else {
+                None
+            };
+            let operator_max: Option<u64> = if let Some(t) = dashboard_args.value_of("operator_max") {
+                Some(t.parse().map_err(|e| STError(format!("Invalid --operator-max: {}", e)))?)
+            } else {
+                None
+            };
+            let message_max: Option<u64> = if let Some(t) = dashboard_args.value_of("message_max") {
+                Some(t.parse().map_err(|e| STError(format!("Invalid --message-max: {}", e)))?)
+            } else {
+                None
+            };
+
             println!("Waiting for source computation...");
             let replay_source = make_replay_source(&args)?;
             println!("Connected to source computation!");
@@ -182,30 +214,30 @@ fn run() -> Result<(), STError> {
                 listen("127.0.0.1:3012", |out| { Server { out, pag_recv: &pag_recv, pag_recvd: HashMap::new() } } ).unwrap();
             });
 
-            st2::commands::dashboard::run(timely_configuration, replay_source, pag_send)?;
+            st2::commands::dashboard::run(timely_configuration, replay_source, pag_send, epoch_max, operator_max, message_max)?;
 
             listener.join().expect("couldn't join listener");
             Ok(())
         }
         ("invariants", Some(invariants_args)) => {
-            let temporal_epoch: Option<u64> = if let Some(t) = invariants_args.value_of("temporal_epoch") {
-                Some(t.parse().map_err(|e| STError(format!("Invalid --temporal-epoch: {}", e)))?)
-            } else {
-                None
-            };
-            let temporal_operator: Option<u64> = if let Some(t) = invariants_args.value_of("temporal_operator") {
-                Some(t.parse().map_err(|e| STError(format!("Invalid --temporal-operator: {}", e)))?)
-            } else {
-                None
-            };
-            let temporal_message: Option<u64> = if let Some(t) = invariants_args.value_of("temporal_message") {
-                Some(t.parse().map_err(|e| STError(format!("Invalid --temporal-message: {}", e)))?)
-            } else {
-                None
-            };
-
             let progress_max: Option<u64> = if let Some(t) = invariants_args.value_of("progress_max") {
                 Some(t.parse().map_err(|e| STError(format!("Invalid --progress-max: {}", e)))?)
+            } else {
+                None
+            };
+            let epoch_max: Option<u64> = if let Some(t) = invariants_args.value_of("epoch_max") {
+                println!("epoch max given");
+                Some(t.parse().map_err(|e| STError(format!("Invalid --epoch-max: {}", e)))?)
+            } else {
+                None
+            };
+            let operator_max: Option<u64> = if let Some(t) = invariants_args.value_of("operator_max") {
+                Some(t.parse().map_err(|e| STError(format!("Invalid --operator-max: {}", e)))?)
+            } else {
+                None
+            };
+            let message_max: Option<u64> = if let Some(t) = invariants_args.value_of("message_max") {
+                Some(t.parse().map_err(|e| STError(format!("Invalid --message-max: {}", e)))?)
             } else {
                 None
             };
@@ -213,7 +245,7 @@ fn run() -> Result<(), STError> {
             let replay_source = make_replay_source(&args)?;
             println!("Connected!");
 
-            st2::commands::invariants::run(timely_configuration, replay_source, temporal_epoch, temporal_operator, temporal_message, progress_max)
+            st2::commands::invariants::run(timely_configuration, replay_source, epoch_max, operator_max, message_max, progress_max)
         }
         _ => panic!("Invalid subcommand"),
     }?;
@@ -328,6 +360,17 @@ impl<'a> Handler for Server<'a> {
                     self.out.send(json!({"type": "MET", "payload": result }).to_string())?;
                 } else {
                     self.out.send(json!({"type": "MET", "payload": Vec::<u64>::new() }).to_string())?;
+                }
+            }
+            "INV" => {
+                if let Some(events) = self.pag_recvd.remove(&0) {
+                    let result: Vec<_> = events.iter().filter_map(|x| match x {
+                        PagData::Inv(x) => Some(x),
+                        _ => None
+                    }).collect();
+                    self.out.send(json!({"type": "INV", "payload": result }).to_string())?;
+                } else {
+                    self.out.send(json!({"type": "INV", "payload": Vec::<u64>::new() }).to_string())?;
                 }
             }
             _ => unimplemented!()

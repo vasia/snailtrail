@@ -80,8 +80,6 @@ fn main() {
                 timer.elapsed().as_millis()
             );
 
-            // @TODO: this and other timely events aren't consistently
-            // flushed when stalling the application beforehand.
             timely_logger.log(TimelyEvent::Text(format!(
                 "[st] closed times before: {:?}",
                 input.time()
@@ -91,9 +89,6 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
             }
         }
-
-        // stall application
-        // use std::io::stdin; stdin().read_line(&mut String::new()).unwrap();
     })
     .expect("Computation terminated abnormally");
 }

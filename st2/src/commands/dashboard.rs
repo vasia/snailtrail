@@ -5,6 +5,9 @@ use crate::PagData;
 use crate::commands::algo::{KHops, KHopsSummary};
 use crate::{MetricsData, KHopSummaryData};
 use crate::commands::metrics::Metrics;
+use crate::InvariantData;
+use crate::commands::invariants::Invariants;
+use crate::{EpochData, OperatorData, MessageData};
 
 use timely::dataflow::Stream;
 use timely::dataflow::operators::inspect::Inspect;
@@ -24,7 +27,11 @@ use tdiag_connect::receive::ReplaySource;
 pub fn run(
     timely_configuration: timely::Configuration,
     replay_source: ReplaySource,
-    pag_send: Arc<Mutex<mpsc::Sender<(u64, PagData)>>>) -> Result<(), STError> {
+    pag_send: Arc<Mutex<mpsc::Sender<(u64, PagData)>>>,
+    epoch_max: Option<u64>,
+    operator_max: Option<u64>,
+    message_max: Option<u64>,
+) -> Result<(), STError> {
 
     timely::execute(timely_configuration, move |worker| {
         let index = worker.index();
@@ -33,6 +40,9 @@ pub fn run(
         let pag_send2 = pag_send.lock().expect("cannot lock pag_send").clone();
         let pag_send3 = pag_send.lock().expect("cannot lock pag_send").clone();
         let pag_send4 = pag_send.lock().expect("cannot lock pag_send").clone();
+        let pag_send6 = pag_send.lock().expect("cannot lock pag_send").clone();
+        let pag_send7 = pag_send.lock().expect("cannot lock pag_send").clone();
+        let pag_send8 = pag_send.lock().expect("cannot lock pag_send").clone();
 
         // read replayers from file (offline) or TCP stream (online)
         let readers = connect::make_readers(replay_source.clone(), worker.index(), worker.peers()).expect("couldn't create readers");
@@ -83,6 +93,51 @@ pub fn run(
                     })))
                     .expect("metrics")
             });
+
+
+            if let Some(epoch_max) = epoch_max {
+                let max = Duration::from_millis(epoch_max);
+                let max_nanos: u64 = max.as_nanos().try_into().unwrap();
+                pag.max_epoch(max)
+                    .inspect(move |(x, y)| {
+                        pag_send6
+                            .send((0, PagData::Inv(InvariantData::Epoch(EpochData {
+                                max: max_nanos,
+                                from: *x,
+                                to: *y
+                            }))))
+                            .expect("inv_epoch")
+                    });
+            }
+
+            if let Some(operator_max) = operator_max {
+                let max = Duration::from_millis(operator_max);
+                let max_nanos: u64 = max.as_nanos().try_into().unwrap();
+                pag.max_operator(max)
+                    .inspect(move |(x, y)| {
+                        pag_send7
+                            .send((0, PagData::Inv(InvariantData::Operator(OperatorData {
+                                max: max_nanos,
+                                from: x.clone(),
+                                to: y.clone()
+                            }))))
+                            .expect("inv_op")
+                    });
+            }
+
+            if let Some(message_max) = message_max {
+                let max = Duration::from_millis(message_max);
+                let max_nanos: u64 = max.as_nanos().try_into().unwrap();
+                pag.max_message(max)
+                    .inspect(move |x| {
+                        pag_send8
+                            .send((0, PagData::Inv(InvariantData::Message(MessageData {
+                                max: max_nanos,
+                                msg: x.clone(),
+                            }))))
+                            .expect("inv_msg")
+                    });
+            }
         });
     })
         .map_err(|x| STError(format!("error in the timely computation: {}", x)))?;

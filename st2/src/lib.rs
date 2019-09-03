@@ -9,6 +9,7 @@
 #![deny(missing_docs)]
 
 use crate::pag::PagEdge;
+use crate::pag::PagNode;
 use st2_logformat::ActivityType;
 use serde::Serialize;
 
@@ -56,7 +57,9 @@ pub enum PagData {
     /// aggregates (for analysis)
     Agg(KHopSummaryData),
     /// metrics
-    Met(MetricsData)
+    Met(MetricsData),
+    /// invariants
+    Inv(InvariantData),
 }
 
 #[derive(Serialize, Debug)]
@@ -81,6 +84,41 @@ pub struct MetricsData {
     rc: u64,
 }
 
+#[derive(Serialize, Debug)]
+/// Types of invariants that are checked
+pub enum InvariantData {
+    // /// Max Progress pause invariant
+    // Progress,
+    /// Max epoch duration invariant
+    Epoch(EpochData),
+    /// Max operator duration invariant
+    Operator(OperatorData),
+    /// Max message duration invariant
+    Message(MessageData),
+}
+
+#[derive(Serialize, Debug)]
+/// Serialization type for max epoch
+pub struct EpochData {
+    max: u64,
+    from: PagNode,
+    to: PagNode,
+}
+
+#[derive(Serialize, Debug)]
+/// Serialization type for max operator
+pub struct OperatorData {
+    max: u64,
+    from: PagEdge,
+    to: PagEdge,
+}
+
+#[derive(Serialize, Debug)]
+/// Serialization type for max message
+pub struct MessageData {
+    max: u64,
+    msg: PagEdge,
+}
 
 
 // /// Collects all data within a single epoch and applies user-defined logic.

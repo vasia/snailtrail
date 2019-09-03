@@ -62,6 +62,17 @@ impl<'a> From<&'a LogRecord> for PagNode {
     }
 }
 
+impl Default for PagNode {
+    fn default() -> Self {
+        PagNode {
+            timestamp: Default::default(),
+            worker_id: Default::default(),
+            epoch: Default::default(),
+            seq_no: Default::default()
+        }
+    }
+}
+
 impl std::fmt::Debug for PagNode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // write!(f, "{}|{:?}@w{} (s{})", self.epoch, self.timestamp, self.worker_id, self.seq_no)
@@ -104,7 +115,6 @@ impl PagEdge {
     /// Due to clock skew, we can't give guarantees that `to.timestamp > from.timestamp`.
     /// We report a duration of 0 in the case that `to.timestamp < from.timestamp`.
     pub fn duration(&self) -> u128 {
-        // @TODO: Due to clock skew, this is sometimes < 0
         let dst_ts = self.destination.timestamp.as_nanos();
         let src_ts = self.source.timestamp.as_nanos();
 
@@ -125,6 +135,19 @@ impl Ord for PagEdge {
 impl PartialOrd for PagEdge {
     fn partial_cmp(&self, other: &PagEdge) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl Default for PagEdge {
+    fn default() -> Self {
+        PagEdge {
+            source: Default::default(),
+            destination: Default::default(),
+            edge_type: Waiting,
+            operator_id: None,
+            traverse: TraversalType::Block,
+            length: None,
+        }
     }
 }
 
@@ -237,7 +260,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         // operator it belongs to has started. In this case, we probably misreport the operator type
         // (Spinning instead of Processing) and its length (0 instead of the DataMessage's contents).
         // I think that this has to do with differential arrangements, so it's worth thinking about
-        // them and this bug in tandem.
+        // them and this bug together.
         // No data messages outside a Schedules event
         // assert!((record.event_type != Start) || prev.activity_type != DataMessage, format!("{:?}, {:?}", prev, record));
 
@@ -253,7 +276,6 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         assert!(record.timestamp > prev.timestamp && record.local_worker == prev.local_worker);
 
         // @TODO: make configurable
-        // @TODO: time-based vs. interpreted (cf. screenshot)
         let waiting_or_busy = if (record.timestamp.as_nanos() - prev.timestamp.as_nanos()) > 15_000 {
             Waiting
         } else {
