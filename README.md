@@ -56,15 +56,17 @@ fn main() {
 
 ### 3. Inspect your computation
 
-For example, we might want to generate aggregate metrics for an online 2 worker source computation using 2 ST2 peers:
+For example, we might want to see the online dashboard for an online 2 worker source computation using 2 ST2 peers:
 
-1. Run `st2 -i 127.0.0.1 -p 1234 -s 2 -w 2 metrics -o metrics.csv`.
+1. Run `st2 -i 127.0.0.1 -p 1234 -s 2 -w 2 dashboard`.
 2. Attach the source computation by running it with `SNAILTRAIL_ADDR="127.0.0.1:1234"` as env variable.
-3. See `metrics.csv` for the aggregate metrics.
+3. Open `dashboard/index.html` from the source root.
 
 ## Commands
 
-- `viz` creates an interactive HTML-based PAG visualization (cf. `docs/graphs` for examples). Try it out: `st2 -f <path/to/dumps> -s <source peers> viz` -> check `graph.html`
+- `dashboard` creates an interactive ST2 dashboard. Optionally, it can be run with `--epoch-max <MS> --message-max <MS> --operator-max <MS>`, to specify max epoch, message, and operator durations for the integrated invariant checker.
+- `algo` runs ST2's graph algorithms (currently, this is a k-hop graph pattern to detect bottleneck causes). Results are logged to `stdout`.
+- `invariants` runs ST2's invariant checker. Depending on flags passed (see `--help`), it checks max epoch, message, operator durations, as well as maximum time between two progress updates in a dataflow. Violations are logged to `stdout`.
 - `metrics` exports aggregate metrics for the source computation (cf. `docs/metrics` for examples). Try it out: `st2 -f <path/to/dumps> -s <source peers> metrics` -> check `metrics.csv`
 
 ## Online vs. Offline
@@ -100,6 +102,7 @@ The "magic" mostly happens at
 - `timely-adapter/src/lib.rs` for the `LogRecord` creation,
 - `st2/src/pag.rs` for the `PAG` creation, and the
 - `inspect.rs` command, `triangles.rs` source computation, and `minimal.rs` source computation tying it all together.
+- The various commands in `st2/src/commands` make use of the PAG construction to run algorithms on top of it.
 
 ## Structure
 
@@ -113,7 +116,7 @@ The "magic" mostly happens at
 | --------- | -------- | ----------- |
 | adapter | `timely-adapter` | timely / differential 0.9 adapter |
 | infrastructure | `logformat` | Shared definitions of core data types and serialization of traces. |
-| infrastructure, algorithms | `st2` | PAG generation & algorithms for timely 0.9 with epochal semantics. |
+| infrastructure, algorithms | `st2` | PAG generation & algorithms for timely with epochal semantics. |
 
 #### Upstream
 
@@ -140,13 +143,11 @@ Glue code, type definitions, (de)serialization, and intermediate representations
 
 ### Algorithms
 
-_(WIP)_
-
-Implementation of various algorithms that run on top of the PAG to provide insights into the analyzed distributed dataflow's health and performance.
+Implementation of various algorithms that run on top of the PAG to provide insights into the analyzed distributed dataflow's health and performance. Run the `dashboard` subcommand to see a nice summary of graph patterns, invariants, and aggregate metrics we compute.
 
 ## Docs
 
-See the `docs` subfolder for additional documentation. Of course, also check out the `examples` and code documentation built with `cargo doc`.
+See the `docs` subfolder for some additional documentation. Of course, also check out the `examples` and code documentation built with `cargo doc`.
 
 ## Resources
 
@@ -158,6 +159,6 @@ See the `docs` subfolder for additional documentation. Of course, also check out
 
 ## License
 
-SnailTrail is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0), with portions covered by various BSD-like licenses.
+ST2 is primarily distributed under the terms of both the MIT license and the Apache License (Version 2.0), with portions covered by various BSD-like licenses.
 
 See LICENSE-APACHE, and LICENSE-MIT for details.
