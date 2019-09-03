@@ -32,16 +32,16 @@ fn main() {
         let probe = worker.dataflow(|scope| {
             scope.input_from(&mut input)
                 .map(|x| x + 1 as u64)
-                .exchange(|x| *x)
-                .inspect(|x| {})
+                .exchange(|x| *x as u64 + 1)
+                .inspect_batch(move |t,x| { if index == 0 {std::thread::sleep_ms(500)}})
                 // .inspect_batch(move |t,x| println!("w{}: {}", index, x.len()))
                 .probe()
         });
 
         // let logger = worker.log_register().get::<TimelyEvent>("timely").expect("timely logger not found");
-        for round in 0..5 {
+        for round in 0..300 {
             if worker.index() == 0 {
-                for x in 0 .. (round + 1) * 20000 {
+                for x in 0 .. 2000 {
                     input.send(x);
                 }
             }
