@@ -68,8 +68,8 @@ pub enum PagData {
 pub struct KHopSummaryData {
     a: ActivityType,
     wf: u64,
-    ac: isize,
-    wac: isize,
+    ac: u64,
+    wac: u64,
 }
 
 #[derive(Serialize, Debug)]

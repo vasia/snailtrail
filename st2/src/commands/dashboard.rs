@@ -57,24 +57,23 @@ pub fn run(
                     .expect("couldn't send pagedge")
             });
 
-            let khops = pag.khops(2);
+            let khops = pag.khops();
 
             // log khops edges to socket
-            khops.inspect(move |((x, _), t, _diff)| {
+            khops.inspect_time(move |t, (x, _)| {
                 pag_send1
                     .send((t.first - 1, PagData::All((x.source.timestamp.as_nanos().try_into().unwrap(), x.destination.timestamp.as_nanos().try_into().unwrap()))))
                     .expect("khops_edges")
             });
 
+
             let khops_summary = khops.khops_summary();
 
             // log khops summary to socket
-            khops_summary.inspect(move |(((a, wf), (ac, wac)), t, diff)| {
-                if *diff > 0 {
-                    pag_send2
-                        .send((t.first - 1, PagData::Agg(KHopSummaryData {a: *a, wf: *wf, ac: *ac, wac: *wac })))
-                        .expect("khops_summary")
-                }
+            khops_summary.inspect_time(move |t, ((a, wf), (ac, wac))| {
+                pag_send2
+                    .send((t.first - 1, PagData::Agg(KHopSummaryData {a: *a, wf: *wf, ac: *ac, wac: *wac })))
+                    .expect("khops_summary")
             });
 
 

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::{io::Read, time::Duration};
 use std::cmp::Ordering;
 use std::hash::Hash;
+use std::convert::TryInto;
 
 use timely::dataflow::{channels::pact::Exchange, operators::generic::operator::Operator, Scope};
 use timely::dataflow::channels::pact::Pipeline;
@@ -114,14 +115,14 @@ impl PagEdge {
     /// PagEdge's duration in ns.
     /// Due to clock skew, we can't give guarantees that `to.timestamp > from.timestamp`.
     /// We report a duration of 0 in the case that `to.timestamp < from.timestamp`.
-    pub fn duration(&self) -> u128 {
+    pub fn duration(&self) -> u64 {
         let dst_ts = self.destination.timestamp.as_nanos();
         let src_ts = self.source.timestamp.as_nanos();
 
         if src_ts > dst_ts {
             0
         } else {
-            dst_ts - src_ts
+            (dst_ts - src_ts).try_into().unwrap()
         }
     }
 }
@@ -208,7 +209,7 @@ pub trait ConstructPAG<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Takes `LogRecord`s and connects local edges (per epoch, per worker)
     fn make_local_edges(&self, index: usize) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
     /// Helper to create a `PagEdge` from two `LogRecord`s
-    fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge;
+    fn build_local_edge(prev: &LogRecord, record: &LogRecord, next: &LogRecord) -> PagEdge;
     /// Takes `LogRecord`s and connects remote edges (per epoch, across workers)
     fn make_remote_edges(&self) -> Stream<S, (PagEdge, S::Timestamp, isize)>;
 }
@@ -225,7 +226,8 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         // are cut up due to `peel_ops`.
 
         let mut vector = Vec::new();
-        let mut buffer: HashMap<usize, LogRecord> = HashMap::new();
+        let mut prev2_buffer: HashMap<usize, LogRecord> = HashMap::new();
+        let mut prev_buffer: HashMap<usize, LogRecord> = HashMap::new();
 
         self.unary_frontier(Pipeline, "Local Edges", move |_, _| { move |input, output| {
             input.for_each(|cap, data| {
@@ -233,19 +235,28 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
                 for lr in vector.drain(..) {
                     let local_worker = lr.local_worker as usize;
 
-                    if let Some(prev_lr) = buffer.get(&local_worker) {
-                        // we've seen a lr from this local_worker before
+                    if let Some(prev_lr) = prev_buffer.remove(&local_worker) {
+                        if let Some(prev2_lr) = prev2_buffer.remove(&local_worker) {
+                            // we've seen two lrs from this local_worker before
 
-                        assert!(lr.epoch >= prev_lr.epoch, format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
-                        assert!(lr.timestamp >= prev_lr.timestamp, format!("w{}: {:?} should happen before {:?}", index, prev_lr, lr));
+                            assert!(prev_lr.epoch >= prev2_lr.epoch);
+                            assert!(prev_lr.timestamp >= prev2_lr.timestamp);
+                            assert!(lr.epoch >= prev_lr.epoch, format!("w{}: {:?} should happen before {:?}", index, prev_lr.epoch, lr.epoch));
+                            assert!(lr.timestamp >= prev_lr.timestamp, format!("w{}: {:?} should happen before {:?}", index, prev_lr, lr));
 
-                        if prev_lr.epoch == lr.epoch {
                             // only join lrs within an epoch
-                            output.session(&cap).give((Self::build_local_edge(&prev_lr, &lr), cap.time().clone(), 1));
+                            if prev2_lr.epoch == prev_lr.epoch && prev_lr.epoch == lr.epoch  {
+                                // builds the edge between prev2_lr and prev_lr
+                                output.session(&cap).give((Self::build_local_edge(&prev2_lr, &prev_lr, &lr), cap.time().clone(), 1));
+                            }
                         }
+
+                        // move prev_lr -> prev2_lr
+                        prev2_buffer.insert(local_worker, prev_lr);
                     }
 
-                    buffer.insert(local_worker, lr);
+                    // move lr -> prev_lr
+                    prev_buffer.insert(local_worker, lr);
                 }
             });
 
@@ -253,7 +264,7 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         }})
     }
 
-    fn build_local_edge(prev: &LogRecord, record: &LogRecord) -> PagEdge {
+    fn build_local_edge(prev: &LogRecord, record: &LogRecord, next: &LogRecord) -> PagEdge {
         // Rules for a well-formatted PAG
 
         // @TODO: In some cases, this assertion doesn't hold and a DataMessage is sent before the
@@ -275,13 +286,6 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
         // local edges are local and provided in order
         assert!(record.timestamp > prev.timestamp && record.local_worker == prev.local_worker);
 
-        // @TODO: make configurable
-        let waiting_or_busy = if (record.timestamp.as_nanos() - prev.timestamp.as_nanos()) > 15_000 {
-            Waiting
-        } else {
-            Busy
-        };
-
         let processing_or_spinning = if record.length.is_some() {
             Processing
         } else {
@@ -290,20 +294,26 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructPAG<S> for Stream<S, Lo
 
         let p = prev.event_type;
         let r = record.event_type;
-        let edge_type = match (prev.activity_type, record.activity_type) {
+        let mut edge_type = match (prev.activity_type, record.activity_type) {
             // See TODO above.
             // (ControlMessage, DataMessage) => {println!("{:?}, {:?}", prev, record); unreachable!()},
             // (DataMessage, ControlMessage) => {println!("{:?}, {:?}", prev, record); unreachable!()},
 
             (Scheduling, Scheduling) if (p == Start && r == End) => processing_or_spinning,
-            (Scheduling, Scheduling) if (p == End && r == Start) => waiting_or_busy,
-            (ControlMessage, _) => waiting_or_busy,
-            (_, ControlMessage) => waiting_or_busy,
+            (Scheduling, Scheduling) if (p == End && r == Start) => Busy,
+            (_, ControlMessage) if r == Received => Waiting,
+            (_, ControlMessage) => Busy,
+            (ControlMessage, _) => Busy,
             (DataMessage, _) => Processing,
             (_, DataMessage) => Processing,
 
             _ => panic!("{:?}, {:?}", prev, record)
         };
+
+        // waiting on data message
+        if record.activity_type == Scheduling && next.activity_type == DataMessage && edge_type == Busy {
+            edge_type = Waiting;
+        }
 
         let operator_id = if prev.event_type != End && record.event_type != Start {
             prev.operator_id

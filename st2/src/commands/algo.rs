@@ -9,24 +9,23 @@ use timely::dataflow::operators::map::Map;
 use timely::dataflow::operators::delay::Delay;
 use timely::dataflow::operators::generic::operator::Operator;
 use timely::dataflow::channels::pact::Pipeline;
-
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
-use differential_dataflow::Collection;
-use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::collection::AsCollection;
-use differential_dataflow::operators::join::JoinCore;
-use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::operators::reduce::Reduce;
+use timely::dataflow::operators::concat::Concat;
+use timely::dataflow::operators::inspect::Inspect;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::aggregation::aggregate::Aggregate;
 
 use std::time::Duration;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 use st2_logformat::pair::Pair;
 use st2_logformat::ActivityType;
 
 use tdiag_connect::receive as connect;
 use tdiag_connect::receive::ReplaySource;
+
 
 
 /// Runs graph algorithms on ST2.
@@ -44,9 +43,9 @@ pub fn run(
             let pag: Stream<_, (PagEdge, Pair<u64, Duration>, isize)>  = pag::create_pag(scope, readers, index, 1);
 
             pag
-                .khops(2)
+                .khops()
                 .khops_summary()
-                .inspect(move |(x, t, diff)| if *diff > 0 { println!("k-hops summary for epoch {:?}: {:?}", t.first - 1, x); });
+                .inspect_time(|t, x| println!("{}: {:?}", t.first, x));
         });
     })
         .map_err(|x| STError(format!("error in the timely computation: {}", x)))?;
@@ -59,58 +58,55 @@ pub fn run(
 pub trait KHopsSummary<S: Scope<Timestamp = Pair<u64, Duration>>> {
     /// Summarize khops edges weighted and unweighted for each epoch
     /// by activity type and worker_id.
-    fn khops_summary(&self) -> Collection<S, ((ActivityType, u64), (isize, isize)), isize>;
+    fn khops_summary(&self) -> Stream<S, ((ActivityType, u64), (u64, u64))>;
 }
 
-impl<S: Scope<Timestamp = Pair<u64, Duration>>> KHopsSummary<S> for Collection<S, (PagEdge, u32), isize>{
-    fn khops_summary(&self) -> Collection<S, ((ActivityType, u64), (isize, isize)), isize> {
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> KHopsSummary<S> for Stream<S, (PagEdge, u64)>{
+    fn khops_summary(&self) -> Stream<S, ((ActivityType, u64), (u64, u64))> {
         self.map(|(edge, weight)| ((edge.edge_type, edge.source.worker_id), (edge, weight)))
-            .reduce(|_key, input, output| {
-                let summary = input.iter().fold((0, 0), |acc, ((_edge, weight), diff)| {
-                    (acc.0 + *diff, acc.1 + *diff * *weight as isize)
-                });
-                output.push((summary, 1))
-            })
+            .aggregate::<_,(u64, u64),_,_,_>(
+                |_key, (_edge, weight), acc| {
+                    *acc = (acc.0 + 1, acc.1 + weight);
+                },
+                |key, acc| (key, acc),
+                |key| calculate_hash(key))
     }
 }
 
-
-/// Run graph algorithms on provided `Stream`.
-pub trait KHops<S: Scope<Timestamp = Pair<u64, Duration>>> {
-    /// Run khops algorithm on provided `Stream`.
-    /// Returns a stream of reachable edges and the steps necessary to reach them.
-    fn khops(&self, steps: u32) -> Collection<S, (PagEdge, u32), isize>;
+fn calculate_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
 }
 
+/// Run khops on provided `Stream`.
+pub trait KHops<S: Scope<Timestamp = Pair<u64, Duration>>> {
+    /// Run khops algorithm on provided `Stream`.
+    /// Currently, this is hardcoded to a 2-hop pattern.
+    /// Returns a stream of reachable edges and the steps necessary to reach them.
+    fn khops(&self) -> Stream<S, (PagEdge, u64)>;
+}
+
+
 impl<S: Scope<Timestamp = Pair<u64, Duration>>> KHops<S> for Stream<S, (PagEdge, S::Timestamp, isize)>{
-    fn khops(&self, steps: u32) -> Collection<S, (PagEdge, u32), isize>{
+    fn khops(&self) -> Stream<S, (PagEdge, u64)> {
         let epochized = self
-            .delay_batch(|time| Pair::new(time.first + 1, Default::default()))
-            .map(|(x, t, diff)| (x, Pair::new(t.first + 1, Default::default()), diff));
-
-        let waiting = epochized
-            .filter(|(x, _t, _diff)| x.edge_type == ActivityType::Waiting)
-            .as_collection()
-            .map(|x| (x.destination.timestamp, (x, 0)));
-
-        let all: Arranged<_, TraceAgent<OrdValSpine<Duration, _, Pair<u64, Duration>, isize>>> = epochized
-            .as_collection()
-            .map(|x| (x.destination.timestamp, x))
-            .arrange_by_key();
+            .map(|(x, _, _)| (x.destination.timestamp, (x, 0 as u64)))
+            .delay_batch(|time| Pair::new(time.first + 1, Default::default()));
 
         // processing end events that might also be data ends
-        let data_ends = epochized.unary_frontier(Pipeline, "DataEnds", move |_, _| {
+        let step_0_processing = epochized.unary_frontier(Pipeline, "DataEnds", move |_, _| {
             let mut vector = Vec::new();
             let mut waiting_buffer: BTreeSet<usize> = BTreeSet::new();
             move |input, output| {
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
-                    for (edge, t, diff) in vector.drain(..) {
+                    for (dest, (edge, w)) in vector.drain(..) {
                         let wid = edge.destination.worker_id as usize;
 
                         if waiting_buffer.contains(&wid) {
                             if edge.edge_type == ActivityType::Processing {
-                                output.session(&cap).give(((edge.destination.timestamp, (edge, 0)), t, diff));
+                                output.session(&cap).give((dest, (edge, w)));
                             }
                             waiting_buffer.remove(&wid);
                         } else if edge.edge_type == ActivityType::Waiting {
@@ -118,40 +114,79 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> KHops<S> for Stream<S, (PagEdge,
                         }
                     }
                 });
-            }})
-            .as_collection();
+            }});
 
-        let mut streams = (0 .. steps).fold(vec![data_ends, waiting], |mut acc, n| {
-            let last = acc.pop().expect("?");
-            let last_a = last.arrange_by_key();
-            let new = if n != 0 {
-                last_a.join_core(&all, move |_key, _old, new| Some((new.source.timestamp, (new.clone(), steps - n))))
-            } else {
-                let data_ends = acc.pop().expect("?");
-                let data_ends_a = data_ends.arrange_by_key();
-                let data_join = data_ends_a
-                    .join_core(&all, move |_key, _old, new| Some((new.source.timestamp, (new.clone(), steps - n))))
-                    .filter(|(_, (x, _))| x.edge_type == ActivityType::DataMessage);
+        // hop if data message
+        let step_1_processing = step_0_processing.hop(&epochized.filter(|(_, (x, _))| x.edge_type == ActivityType::DataMessage));
 
-                let waiting_joined = last_a.join_core(&all, move |_key, _old, new| Some((new.source.timestamp, (new.clone(), steps - n))));
-                let no_waiting = waiting_joined.filter(|(_, (x, _))| x.edge_type != ActivityType::Waiting);
-                let only_waiting = waiting_joined.filter(|(_, (x, _))| x.edge_type == ActivityType::Waiting);
-                let post_waiting = only_waiting.join_core(&all, move |_key, _old, new| Some((new.source.timestamp, (new.clone(), steps - n))));
+        let step_0_waiting = epochized.filter(|(_, (x, _))| x.edge_type == ActivityType::Waiting);
+        // first hop shouldn't happen worker-locally.
+        let step_1_no_waiting = step_0_waiting.hop(&epochized.filter(|(_, (x, _))| x.edge_type != ActivityType::Waiting));
 
-                no_waiting.concat(&post_waiting).concat(&data_join)
-            };
+        let step_1 = step_1_no_waiting.concat(&step_1_processing);
 
-            acc.push(last);
-            acc.push(new);
-            acc
-        });
+        let step_2 = step_1.hop(&epochized);
 
-        // remove `waiting`
-        streams.remove(0);
-        streams
-            .pop()
-            .expect("?")
-            .concatenate(streams)
-            .map(|(_key, new)| new)
+        // @TODO: Optionally, only weigh from the second hop onwards
+        // step_1.map(|(a, (x, _))| (a, (x, 0))).concat(&step_2).map(|(_, x)| x)
+        step_1.concat(&step_2).map(|(_, x)| x)
+    }
+}
+
+
+trait KHop<S: Scope<Timestamp = Pair<u64, Duration>>>{
+    fn hop(&self, other: &Stream<S, (Duration, (PagEdge, u64))>) -> Stream<S, (Duration, (PagEdge, u64))>;
+}
+
+impl<S: Scope<Timestamp = Pair<u64, Duration>>> KHop<S>
+    for Stream<S, (Duration, (PagEdge, u64))>
+{
+    fn hop(&self, other: &Stream<S, (Duration, (PagEdge, u64))>) -> Stream<S, (Duration, (PagEdge, u64))> {
+        use std::convert::TryInto;
+        let exchange = Exchange::new(|(x, _): &(Duration, _)| x.as_nanos().try_into().unwrap());
+        let exchange2 = Exchange::new(|(x, _): &(Duration, _)| x.as_nanos().try_into().unwrap());
+
+        // @TODO: in this join implementation, state continually grows.
+        // To fix this, check frontier and remove all state that is from older epochs
+        // (cross-epochs join shouldn't happen anyways)
+        self.binary(&other, exchange, exchange2, "HashJoin", |_capability, _info| {
+            let mut map1 = HashMap::<_, Vec<PagEdge>>::new();
+            let mut map2 = HashMap::<_, Vec<PagEdge>>::new();
+
+            let mut vector1 = Vec::new();
+            let mut vector2 = Vec::new();
+
+            move |input1, input2, output| {
+                // Drain first input, check second map, update first map.
+                input1.for_each(|cap, data| {
+                    data.swap(&mut vector1);
+                    let mut session = output.session(&cap);
+                    for (key, (val1, _)) in vector1.drain(..) {
+                        if let Some(values) = map2.get(&key) {
+                            for val2 in values.iter() {
+                                session.give((val2.source.timestamp, (val2.clone(), val2.duration())));
+                            }
+                        }
+
+                        // weigh with activity duration
+                        map1.entry(key).or_insert(Vec::new()).push(val1);
+                    }
+                });
+
+                input2.for_each(|cap, data| {
+                    data.swap(&mut vector2);
+                    let mut session = output.session(&cap);
+                    for (key, (val2, _)) in vector2.drain(..) {
+                        if let Some(values) = map1.get(&key) {
+                            for _val1 in values.iter() {
+                                session.give((val2.source.timestamp, (val2.clone(), val2.duration())));
+                            }
+                        }
+
+                        map2.entry(key).or_insert(Vec::new()).push(val2);
+                    }
+                });
+            }
+        })
     }
 }

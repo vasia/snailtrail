@@ -611,7 +611,7 @@ function KHops({ epoch, showWaiting, splitWorker }) {
 
   return (
     <div>
-      <h1 style={{ marginRight: "18px" }}>K-Hops (up to epoch {epoch})</h1>
+      <h1 style={{ marginRight: "18px" }}>K-Hops (for epoch {epoch})</h1>
       <div style={{ display: "flex", flexFlow: "row wrap" }}>
         <div>
           <h2>Unweighted</h2>
