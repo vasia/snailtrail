@@ -89,6 +89,8 @@ impl<S: Scope<Timestamp = Pair<u64, Duration>>> ConstructLRs<S> for Stream<S, Co
                         Schedule(ref e) => {
                             assert!(cap.time() > &Pair::new(0, Default::default()));
 
+                            // @TODO: For LBF > 1, we might not have seen all `Operates` events
+                            // at all workers, so this fails.
                             let addr = ids_to_addrs.get(&e.id).expect("operates went wrong");
                             if !outer_operates.contains(addr) {
                                 output.session(&cap).give((epoch, seq_no, length, (t, wid, x)));
